@@ -15,7 +15,7 @@ Dark-only UI. Views: Live (LED strip, tempo, level, tone, spectrum + run control
 Firmware (device details, update). The Debug toggle (top bar, only for debug firmware) adds
 Settings (WiFi credentials), Errors, Diagnostics, CLI and a request log.
 
-    python Host/ledapp.py [--device IP] [--debug]
+    python software/ledapp.py [--device IP] [--debug]
 """
 
 from __future__ import annotations

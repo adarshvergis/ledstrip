@@ -17,6 +17,6 @@ $py = Find-Python
 $exe = $py[0]; $pre = @($py | Select-Object -Skip 1)
 Use-PycacheOutsideSource
 Set-Location $Root
-& $exe @pre -m compileall -q -f Host Scripts/firmware
+& $exe @pre -m compileall -q -f software Scripts/firmware
 if ($LASTEXITCODE -ne 0) { Write-Host "software build FAILED"; exit $LASTEXITCODE }
 Write-Host "software build OK (sources byte-compiled, nothing to package)"

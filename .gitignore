@@ -3,8 +3,9 @@ CLAUDE.md
 project_details.md
 managed_components/
 dependencies.lock
-Host/ledapp_settings.json
-Host/.venv/
+software/ledapp_settings.json
+software/.venv/
 __pycache__/
 *.pyc
 .vscode/
+text.txt

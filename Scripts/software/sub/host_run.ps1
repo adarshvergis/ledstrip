@@ -11,5 +11,5 @@ $exe = $py[0]; $pre = @($py | Select-Object -Skip 1)
 Use-PycacheOutsideSource
 # -device / -debug -> --device / --debug (what the app's argparse expects)
 $appArgs = @($Words | ForEach-Object { if ($_ -match '^-[A-Za-z]{2,}$') { "-$_" } else { $_ } })
-& $exe @pre "$Root\Host\ledapp.py" @appArgs
+& $exe @pre "$Root\software\ledapp.py" @appArgs
 exit $LASTEXITCODE

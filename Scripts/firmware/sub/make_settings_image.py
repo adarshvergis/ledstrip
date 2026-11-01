@@ -22,7 +22,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "Host"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "software"))
 
 from ledhost import protocol as P  # noqa: E402
 

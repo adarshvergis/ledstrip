@@ -9,5 +9,5 @@ $py = Find-Python
 $exe = $py[0]; $pre = @($py | Select-Object -Skip 1)
 Use-PycacheOutsideSource
 Set-Location $Root
-& $exe @pre Host/tools/proto_test.py
+& $exe @pre software/tools/proto_test.py
 exit $LASTEXITCODE

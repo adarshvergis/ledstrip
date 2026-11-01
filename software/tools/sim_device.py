@@ -14,7 +14,7 @@ Lets the host software be developed and tested without hardware:
 
 Usage (from the repository root)::
 
-    python Host/tools/sim_device.py [--bind 127.0.0.1] [--flags 15|0] [--leds 60] [--fw-delay 0.005]
+    python software/tools/sim_device.py [--bind 127.0.0.1] [--flags 15|0] [--leds 60] [--fw-delay 0.005]
 """
 
 from __future__ import annotations

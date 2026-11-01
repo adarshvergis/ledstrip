@@ -44,7 +44,7 @@ CFG_HEADER = struct.Struct("<IHHIII")
 STORE_CALIB = 0
 STORE_SETTINGS = 1
 SLOT_SIZE = 4096
-SETTINGS_REGION_ADDR = 0x003D8000   # App/build_config.h, partitions.csv
+SETTINGS_REGION_ADDR = 0x003D8000   # firmware/App/build_config.h, partitions.csv
 
 
 class Cmd(IntEnum):

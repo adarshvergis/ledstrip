@@ -3,8 +3,9 @@
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))   # repo root
 $BuildRoot = Join-Path $Root "build\firmware"
+$FwDir = Join-Path $Root "firmware"                  # ESP-IDF project (CMakeLists.txt, App, Interface)
 
-# Flash layout (keep in sync with partitions.csv and App/build_config.h).
+# Flash layout (keep in sync with partitions.csv and firmware/App/build_config.h).
 $FlashImages = @(
     @{ Offset = "0x0";     File = "bootloader.bin" },
     @{ Offset = "0x8000";  File = "partition-table.bin" },
@@ -43,11 +44,21 @@ function Import-IdfEnv {
 }
 
 function Resolve-Port([string]$Port) {
-    # Explicit port wins; otherwise use the only serial port present.
+    # Explicit port wins; otherwise use the only non-Bluetooth serial port present.
     if ($Port) { return $Port }
-    $ports = @(python -m serial.tools.list_ports 2>$null | ForEach-Object { if ($_ -match '^(COM\d+|/dev/\S+)') { $Matches[1] } })
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"      # list_ports prints its summary on stderr
+    $lines = @(python -m serial.tools.list_ports -v 2>&1 | ForEach-Object { "$_" })
+    $ErrorActionPreference = $old
+    $ports = @()
+    for ($n = 0; $n -lt $lines.Count; $n++) {
+        if ($lines[$n] -match '^(COM\d+|/dev/\S+)\s*$') {
+            $desc = if ($n + 1 -lt $lines.Count) { $lines[$n + 1] } else { "" }
+            if ($desc -notmatch 'Bluetooth') { $ports += $Matches[1] }
+        }
+    }
     if ($ports.Count -eq 1) { Write-Host "Using serial port $($ports[0])"; return $ports[0] }
-    if ($ports.Count -eq 0) { throw "no serial port found: connect the board or pass -COMx" }
+    if ($ports.Count -eq 0) { throw "no serial port found (Bluetooth ports ignored): connect the board or pass -COMx" }
     throw "several serial ports found ($($ports -join ', ')): pass -COMx"
 }
 

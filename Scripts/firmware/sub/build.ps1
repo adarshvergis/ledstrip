@@ -21,7 +21,7 @@ if ($Clean) {
 }
 
 Import-IdfEnv
-Set-Location $Root
+Set-Location $FwDir
 New-Item -ItemType Directory -Force -Path $Dirs.BuildFiles, $Dirs.Artefacts | Out-Null
 
 $idf = @("-B", $Dirs.BuildFiles, "-DSDKCONFIG=$($Dirs.BuildFiles)\sdkconfig")

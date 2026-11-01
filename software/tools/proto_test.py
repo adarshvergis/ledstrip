@@ -4,7 +4,7 @@ Starts sim_device.py twice (debug build flags, then release flags) on private po
 checks framing, the live stream (rate, sequence, unsubscribe, lease expiry), calibration,
 settings, firmware upload and that release builds refuse the debug-only commands.
 
-    python Host/tools/proto_test.py
+    python software/tools/proto_test.py
 """
 
 from __future__ import annotations

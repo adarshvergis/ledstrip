@@ -9,6 +9,6 @@ param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Words = @())
 $Dirs = Get-VariantDirs (Get-Variant $Words)
 if (-not (Test-Path "$($Dirs.BuildFiles)\led_strip_fw.elf")) { throw "no build in $($Dirs.BuildFiles): run Scripts\firmware\build.bat first" }
 Import-IdfEnv
-Set-Location $Root
+Set-Location $FwDir
 $Port = Resolve-Port (Get-PortArg $Words)
 Invoke-Checked { idf.py -B $Dirs.BuildFiles "-DSDKCONFIG=$($Dirs.BuildFiles)\sdkconfig" -p $Port monitor }
