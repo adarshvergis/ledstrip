@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>LED Strip Host</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-dot" id="beatDot" aria-hidden="true"></span>
+    <span class="brand-name">LED Strip Host</span>
+  </div>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="main" role="tab">Main</button>
+    <button class="tab" data-tab="calib" role="tab">Calibration</button>
+    <button class="tab" data-tab="settings" role="tab">Settings</button>
+    <button class="tab" data-tab="admin" role="tab">Admin</button>
+  </nav>
+  <div class="conn" id="connPill" title="Connection status">
+    <span class="conn-dot"></span><span id="connText">Not connected</span>
+  </div>
+</header>
+
+<main>
+<!-- ======================= MAIN ======================= -->
+<section class="panel active" id="tab-main">
+  <div class="grid">
+    <div class="card">
+      <h2>Device</h2>
+      <div class="row">
+        <input id="ipInput" type="text" placeholder="IP address, e.g. 192.168.4.1" autocomplete="off" spellcheck="false">
+        <button id="connectBtn" class="primary">Connect</button>
+        <button id="disconnectBtn">Disconnect</button>
+      </div>
+      <div class="row space">
+        <span class="muted">Discovered devices</span>
+        <button id="scanBtn" class="small">Scan</button>
+      </div>
+      <ul class="device-list" id="deviceList"><li class="muted">Press Scan to search the network.</li></ul>
+      <p class="muted small-text" id="beaconNote"></p>
+    </div>
+
+    <div class="card">
+      <h2>Device info</h2>
+      <dl class="kv" id="infoList"><dt>Status</dt><dd>Not connected</dd></dl>
+    </div>
+
+    <div class="card">
+      <h2>Control</h2>
+      <label class="field">Run mode
+        <div class="segmented" id="runModeSeg">
+          <button data-value="0">Audio</button>
+          <button data-value="1">Pattern</button>
+        </div>
+      </label>
+      <label class="field" id="algField">Algorithm
+        <select id="algSelect"></select>
+      </label>
+      <p class="muted small-text" id="algDesc"></p>
+      <label class="field" id="patField">Pattern
+        <select id="patSelect"></select>
+      </label>
+      <label class="field">Brightness <span class="value-badge" id="briValue">-</span>
+        <input type="range" id="briSlider" min="0" max="255" step="1">
+      </label>
+    </div>
+
+    <div class="card wide">
+      <div class="row space">
+        <h2>Live view</h2>
+        <label class="switch-label"><input type="checkbox" id="liveToggle" checked> <span>Live</span></label>
+      </div>
+      <div class="strip" id="strip"></div>
+      <div class="live-grid">
+        <div class="metric">
+          <span class="metric-label">Level</span>
+          <div class="meter"><div class="meter-fill" id="levelFill"></div></div>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Centroid</span>
+          <div class="meter centroid"><div class="centroid-mark" id="centroidMark"></div></div>
+        </div>
+        <div class="metric inline">
+          <span class="metric-label">BPM</span>
+          <span class="metric-big" id="bpmValue">--</span>
+          <span class="beat-flash" id="beatFlash" title="Beat"></span>
+          <span class="muted small-text" id="beatCount"></span>
+        </div>
+      </div>
+      <div class="bands" id="bands"></div>
+      <p class="muted small-text" id="liveNote"></p>
+    </div>
+
+    <div class="card wide">
+      <div class="row space">
+        <h2>Errors</h2>
+        <div class="row">
+          <button id="errRefreshBtn" class="small">Refresh</button>
+          <button id="errClearBtn" class="small danger">Clear</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="errTable">
+          <thead><tr><th>Code</th><th>Name</th><th>Severity</th><th>Count</th><th>Last (uptime)</th></tr></thead>
+          <tbody><tr><td colspan="5" class="muted">No data</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= CALIBRATION ======================= -->
+<section class="panel" id="tab-calib">
+  <div class="card toolbar">
+    <div class="row wrap">
+      <span class="mode-badge" id="calibModeBadge">MAIN</span>
+      <button id="calibModeBtn" class="primary">Enter calibration mode</button>
+      <span class="dirty-badge" id="dirtyBadge" hidden>Unsaved changes</span>
+      <span class="spacer"></span>
+      <button id="calibSaveBtn" class="primary needs-calib">Save to flash</button>
+      <button id="calibReloadBtn" class="needs-calib">Reload (discard)</button>
+      <button id="calibResetAllBtn" class="needs-calib danger">Reset all to defaults</button>
+      <button id="calibExportBtn">Export JSON</button>
+      <button id="calibImportBtn" class="needs-calib">Import JSON</button>
+      <input type="file" id="calibImportFile" accept=".json,application/json" hidden>
+      <button id="calibRefreshBtn" class="small">Refresh</button>
+    </div>
+    <p class="muted small-text" id="calibHint">Parameters can only be changed in calibration mode. Leaving calibration mode discards unsaved changes.</p>
+  </div>
+  <div class="calib-layout">
+    <aside class="card alg-list">
+      <h2>Algorithms</h2>
+      <ul id="algList"></ul>
+    </aside>
+    <div class="stage-area" id="stageArea"><div class="card muted">Connect to a device to load the calibration schema.</div></div>
+  </div>
+</section>
+
+<!-- ======================= SETTINGS ======================= -->
+<section class="panel" id="tab-settings">
+  <div class="notice" id="rebootNotice" hidden>
+    <span>Some changes take effect only after a reboot.</span>
+    <button id="rebootNowBtn" class="primary small">Reboot device now</button>
+  </div>
+  <div class="grid">
+    <form class="card" id="settingsForm" autocomplete="off">
+      <h2>Device settings</h2>
+      <label class="field">Device name <input name="device_name" maxlength="31"></label>
+      <label class="field">Wi-Fi mode
+        <select name="wifi_mode">
+          <option value="0">Auto (station if SSID set, AP fallback)</option>
+          <option value="1">Access point only</option>
+          <option value="2">Station only</option>
+        </select>
+      </label>
+      <fieldset>
+        <legend>Station (join existing network)</legend>
+        <label class="field">SSID <input name="sta_ssid" maxlength="32"></label>
+        <label class="field">Password
+          <span class="pw"><input name="sta_password" type="password" maxlength="64"><button type="button" class="small pw-toggle">Show</button></span>
+        </label>
+      </fieldset>
+      <fieldset>
+        <legend>Access point</legend>
+        <label class="field">SSID <input name="ap_ssid" maxlength="32" placeholder="empty = LEDSTRIP-XXXX"></label>
+        <label class="field">Password
+          <span class="pw"><input name="ap_password" type="password" maxlength="64" placeholder="empty = open, else 8..64"><button type="button" class="small pw-toggle">Show</button></span>
+        </label>
+        <label class="field">Channel <input name="ap_channel" type="number" min="1" max="13" step="1"></label>
+      </fieldset>
+      <fieldset>
+        <legend>LED strip</legend>
+        <label class="field">Max current (mA) <input name="max_current_ma" type="number" min="100" max="3000" step="50"></label>
+        <label class="field">Number of LEDs <input name="num_leds" type="number" min="1" max="65535" step="1"></label>
+        <label class="field">Colour order
+          <select name="color_order">
+            <option value="0">GRB (WS2812B)</option><option value="1">RGB</option><option value="2">BRG</option>
+            <option value="3">RBG</option><option value="4">GBR</option><option value="5">BGR</option>
+          </select>
+        </label>
+      </fieldset>
+      <div class="row wrap">
+        <button type="submit" class="primary">Apply</button>
+        <button type="button" id="settingsReloadBtn">Reload</button>
+        <span class="muted small-text" id="settingsStatus"></span>
+      </div>
+    </form>
+
+    <div class="col">
+      <div class="card">
+        <h2>Backup</h2>
+        <p class="muted small-text">Export all device settings to a JSON file, or apply a previously exported file.</p>
+        <div class="row wrap">
+          <button id="settingsExportBtn">Export settings</button>
+          <button id="settingsImportBtn">Import settings</button>
+          <input type="file" id="settingsImportFile" accept=".json,application/json" hidden>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Maintenance</h2>
+        <div class="row wrap">
+          <button id="rebootBtn">Reboot device</button>
+          <button id="factoryBtn" class="danger">Factory reset settings</button>
+        </div>
+        <div class="confirm" id="factoryConfirm" hidden>
+          <p>Restore all device settings (including Wi-Fi) to defaults? The device may become reachable only via its own access point afterwards.</p>
+          <div class="row">
+            <button id="factoryYesBtn" class="danger">Yes, reset</button>
+            <button id="factoryNoBtn">Cancel</button>
+          </div>
+        </div>
+      </div>
+      <form class="card" id="hostForm">
+        <h2>Host settings</h2>
+        <label class="field">Live poll rate (Hz) <input name="poll_rate_hz" type="number" min="0.5" max="30" step="0.5"></label>
+        <label class="field">Default device IP <input name="default_device_ip" placeholder="e.g. 192.168.1.50"></label>
+        <label class="check"><input name="auto_connect" type="checkbox"> Connect to default device at start-up</label>
+        <div class="row"><button type="submit" class="primary">Save host settings</button></div>
+        <p class="muted small-text">Stored in Host/host_settings.json.</p>
+      </form>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= ADMIN ======================= -->
+<section class="panel" id="tab-admin">
+  <nav class="subtabs">
+    <button class="subtab" data-sub="cli" id="subCliBtn" hidden>CLI</button>
+    <button class="subtab active" data-sub="fw">Firmware update</button>
+    <button class="subtab" data-sub="diag" id="subDiagBtn" hidden>Self diagnostics</button>
+  </nav>
+
+  <div class="subpanel" id="sub-cli">
+    <div class="card terminal">
+      <pre id="cliOut" class="term-out" aria-live="polite">Type 'help' for the command list.
+</pre>
+      <form id="cliForm" class="term-in">
+        <span class="prompt">&gt;</span>
+        <input id="cliInput" autocomplete="off" spellcheck="false" placeholder="command">
+        <button type="submit" class="small">Send</button>
+        <button type="button" class="small" id="cliClearBtn">Clear</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="subpanel active" id="sub-fw">
+    <div class="grid">
+      <div class="card">
+        <h2>Firmware update</h2>
+        <label class="field">Image file (.bin)
+          <input type="file" id="fwFile" accept=".bin,application/octet-stream">
+        </label>
+        <div class="field">Target
+          <div class="segmented" id="fwTargetSeg">
+            <button data-value="app" class="active">Application</button>
+            <button data-value="calib">Calibration region</button>
+          </div>
+        </div>
+        <div class="row wrap">
+          <button id="fwUploadBtn" class="primary">Upload</button>
+          <button id="fwAbortBtn" class="danger">Abort</button>
+        </div>
+        <div class="progress"><div class="progress-fill" id="fwProgress"></div></div>
+        <p class="small-text" id="fwStatus">Idle</p>
+      </div>
+      <div class="card">
+        <h2>Calibration image</h2>
+        <p class="muted small-text">Download the calibration region image currently in effect. It can be written back later with target "Calibration region". Scripts/make_calib_image.py converts between images and JSON.</p>
+        <button id="calibImageBtn">Download current calibration image</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="subpanel" id="sub-diag">
+    <div class="card">
+      <div class="row space wrap">
+        <h2>Self diagnostics</h2>
+        <div class="row">
+          <label class="switch-label"><input type="checkbox" id="diagAuto"> <span>Auto refresh (1 s)</span></label>
+          <button id="diagRefreshBtn" class="small">Refresh</button>
+          <button id="diagResetBtn" class="small danger">Reset min/max</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="table" id="diagTable">
+          <thead><tr><th>Group</th><th>Name</th><th class="num">Value</th><th>Unit</th></tr></thead>
+          <tbody><tr><td colspan="4" class="muted">No data</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+# ---- Target / flash ---------------------------------------------------------
+CONFIG_IDF_TARGET="esp32c3"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ---- Performance ------------------------------------------------------------
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+CONFIG_FREERTOS_HZ=1000
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
+
+# ---- Bootloader / OTA -------------------------------------------------------
+# IDF 2nd stage bootloader + two OTA slots. A new image must confirm itself
+# (esp_ota_mark_app_valid_cancel_rollback) or the bootloader reverts to the old one.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y
+
+# ---- Watchdogs --------------------------------------------------------------
+# IDF task WDT (timer group 0) is disabled: our own error_handler drives the
+# TG0 MWDT directly. The IDF interrupt WDT (timer group 1) stays enabled.
+# CONFIG_ESP_TASK_WDT_EN is not set
+CONFIG_ESP_INT_WDT=y
+CONFIG_ESP_INT_WDT_TIMEOUT_MS=800
+CONFIG_ESP_SYSTEM_PANIC_PRINT_REBOOT=y
+
+# ---- Console: logs over the Xiao USB-C (native USB-Serial/JTAG) --------------
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# ---- FreeRTOS statistics (used by self diagnostics) ---------------------------
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y
+
+# ---- WiFi -------------------------------------------------------------------
+# Network credentials live in our own settings store, not in WiFi NVS.
+# CONFIG_ESP_WIFI_NVS_ENABLED is not set
+CONFIG_LWIP_MAX_SOCKETS=8
+
+# ---- GDMA ownership -----------------------------------------------------------
+# Our drivers own GDMA channels 1 (LED) and 2 (mic) at register level. The IDF
+# hardware AES/SHA drivers would allocate GDMA channels behind our back, so crypto
+# (WPA2 handshake, OTA image hash) runs in software - it is not time critical here.
+# CONFIG_MBEDTLS_HARDWARE_AES is not set
+# CONFIG_MBEDTLS_HARDWARE_SHA is not set
