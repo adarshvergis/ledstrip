@@ -92,6 +92,9 @@ locks, and stages never see half-applied parameters.
 
 ### Adding a stage
 
+Short version below; the full guide with a worked example (and how to add parameters,
+algorithms, patterns, settings, CLI and protocol commands) is in `extending.md`.
+
 1. Append `STAGE_xxx` before `STAGE_COUNT` in `stage_params.h`, and add a `xxx_P_*` parameter enum.
 2. Implement `App/audio_processing/stages/stage_xxx.c`. Copy any existing stage as a template.
 3. Declare it with `extern` in `audio_types.h`, and add it to `s_all_stages` in `pipeline.c`.

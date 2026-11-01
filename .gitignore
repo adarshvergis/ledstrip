@@ -1,6 +1,8 @@
 build/
 build_release/
 build_host_tests/
+CLAUDE.md
+project_details.md
 sdkconfig
 sdkconfig.old
 managed_components/
