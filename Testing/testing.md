@@ -70,7 +70,7 @@ Last synced commit: `08e70b2` (updated by the `/run-tests` workflow)
 | 14 | `Scripts/flash_settings.sh COMx --ssid ... --password ...` (or Debug > Settings + reboot) | device joins the home network, found by Scan; calibration unchanged |
 | 15 | No SSID stored (fresh flash / erased `settings` partition, or debug host Factory reset + reboot) | WiFi off, audio / patterns still work (**not yet tested**) |
 | 16 | Switch the home AP off, then on | device reconnects by itself; `wifi_connect` warning once the back-off reaches 10 s (**not yet tested**) |
-| 17 | Live view at 30 / 60 / 100 Hz (View menu) | top bar shows about that fps, few lost frames, LEDs match the strip (**not yet tested**) |
+| 17 | Live view at 30 / 60 / 100 Hz (Live > Controls) | live header shows about that fps, few lost frames, LEDs match the strip (**not yet tested**) |
 | 18 | Release build (`Scripts/build_release.sh flash COMx`) | Debug mode not offered in the host app; main view, calibration and firmware update work (**not yet tested**) |
 
 ## 4. Security test cases

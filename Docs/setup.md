@@ -113,9 +113,11 @@ CMD: `Scripts\host_run.bat`. Host settings (last device, live rate, debug mode) 
 On first run Windows may show a firewall prompt for Python: allow it on private networks,
 otherwise the UDP live stream and discovery replies are blocked.
 
-Views: Main (scan / connect, info, run mode, algorithm, pattern, brightness, live view; live rate
-30/60/100 Hz in the View menu), Calibration, Firmware. View > Debug mode (shown only when the
-firmware is a debug build) adds a Debug tab: Settings, Errors, Diagnostics, CLI, Log. The app reads
+The UI is dark only. Scan / Connect and the Debug toggle are in the top bar. Views: Live
+(LED strip, LED count, WiFi strength, tempo, level, tone, spectrum; controls for run mode,
+algorithm, pattern, brightness and live rate 30/60/100 Hz), Calibration, Firmware (device
+details, update). The Debug toggle (shown only when the firmware is a debug build) adds a
+Debug tab: Settings, Errors, Diagnostics, CLI, Log. The app reads
 everything once per (re)connect; use the Refresh buttons to reload.
 
 **WiFi firmware update:** build, then Firmware view, upload `build/led_strip_fw.bin` (or the

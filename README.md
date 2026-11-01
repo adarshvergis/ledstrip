@@ -140,7 +140,7 @@ by a glob that is evaluated at CMake configure time.
      (or `flash_settings.bat`, or a JSON file of setting names). This rewrites the whole
      `settings` partition (other settings revert to defaults); firmware and calibration are
      kept. Release firmware can only be provisioned this way.
-   * debug firmware: host app, View > Debug mode > Debug > Settings, then reboot. This needs a
+   * debug firmware: host app, Debug toggle > Debug > Settings, then reboot. This needs a
      connection, so it works only after the device is already on a network.
    * OTA never touches the settings partition, so you can also flash debug, set WiFi from the
      host, then OTA the release image.
@@ -165,10 +165,10 @@ python Host/tools/sim_device.py     # device simulator for testing without hardw
 
 | View | Content |
 |---|---|
-| Main | scan / connect, device info, run mode (audio / pattern), algorithm, pattern, brightness, live view (LED colours, level, centroid, BPM + beat flash, bands); live fps / jitter / lost frames in the top bar, live rate 30/60/100 Hz in the View menu |
+| Live | LED strip (glowing dots, wraps on narrow windows), LED count, WiFi strength, live fps / jitter / lost frames, tempo with beat pulse, level, tone, spectrum with peak hold; controls: run mode (audio / pattern), algorithm, pattern, brightness, live view on/off and rate 30/60/100 Hz |
 | Calibration | enter/exit calibration mode; per-stage parameter editors generated from the device schema, applied live; save to flash, reload, reset stage / all; JSON export/import |
-| Firmware | upload an app image (`led_strip_fw.bin`, reboots after) or a calibration region image; download the current calibration image |
-| Debug (debug firmware only, View > Debug mode) | Settings (device name, WiFi SSID / password, current limit, LED count, colour order; reboot, factory reset), Errors, Diagnostics, CLI, request Log |
+| Firmware | device details (name, firmware version, build, address, WiFi); upload an app image (`led_strip_fw.bin`, reboots after) or a calibration region image; download the current calibration image |
+| Debug (debug firmware only, Debug toggle in the top bar) | Settings (device name, WiFi SSID / password, current limit, LED count, colour order; reboot, factory reset), Errors, Diagnostics, CLI, request Log |
 
 Data is fetched once per (re)connect; Refresh buttons reload it. On first run Windows may ask
 for firewall access for Python: allow private networks, or the UDP live stream and discovery

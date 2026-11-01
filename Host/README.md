@@ -50,12 +50,21 @@ The device needs your WiFi credentials once:
 
 ## Views
 
-* **Main**
-  * Device info, plus run mode, algorithm, pattern and brightness (0-254).
-  * Live view: the LED strip in real colours, level, spectral centroid, BPM with a
-    beat flash, band bars and the device mode.
-  * The top bar shows live frames per second, jitter and lost frames.
-  * **View > Live rate** selects 30, 60 or 100 Hz.
+The UI is dark only. The top bar shows the connection state, the device address,
+Scan / Connect and the **Debug** toggle.
+
+* **Live**
+  * The LED strip as glowing dots in real colours. On narrow windows the strip wraps
+    into several rows. Dim LEDs are brightened on screen so they stay visible; the
+    strip itself is not affected.
+  * The header shows the LED count, WiFi strength (bars and dBm, read at connect),
+    live frames per second, jitter and lost frames, and the device mode when it is
+    not MAIN.
+  * Tempo (BPM with a beat pulse), level and tone (spectral centroid) meters, and
+    spectrum bars with peak hold.
+  * **Controls:** source (Audio / Pattern), algorithm, pattern, brightness (0-254),
+    live view on/off and live rate (30, 60 or 100 Hz). Below about 700 px window
+    width the controls move under the live view.
 * **Calibration**
   * Enter or exit calibration mode, and filter the stages by algorithm.
   * Parameter editors are generated from the stage schema: slider and spin box for
@@ -65,11 +74,13 @@ The device needs your WiFi credentials once:
     may be clamped, is shown.
   * Save to flash, reload, reset a stage or all stages, and export or import JSON.
 * **Firmware**
+  * Device details: name, firmware version and build type, build date, address,
+    WiFi, audio setup and last reset reason.
   * Upload an application image (must start with `0xE9`) or a calibration region
     image, with progress and an abort button.
   * After an application image the app sends REBOOT and reconnects on its own.
   * Download the current calibration image.
-* **Debug** (View > Debug mode)
+* **Debug** (Debug toggle in the top bar)
   * Shown only when the connected device is debug firmware (build flag
     `ENABLE_DEBUG_HOST`).
   * **Settings:** device name, WiFi SSID and password, current limit, LED count and

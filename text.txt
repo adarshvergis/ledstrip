@@ -1,0 +1,10 @@
+Build release : Scripts/build.sh --release
+Build debug   : Scripts/build.sh
+Flash release : Scripts/build.sh --release flash COM11
+Flash debug   : Scripts/build.sh flash COM11
+
+WiFi settings (device is station-only; replaces all stored settings, keeps calibration + firmware):
+Set WiFi (any build): Scripts/flash_settings.sh COM11 --ssid HomeWiFi --password secret [--name ledstrip]
+  or from JSON      : Scripts/flash_settings.sh COM11 settings.json
+Debug build only    : host app > Debug > Settings, then reboot the device
+After setting WiFi  : reboot, then start host: Scripts/host_run.sh [--device <ip>]

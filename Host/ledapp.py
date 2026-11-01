@@ -11,8 +11,9 @@ Threads:
   * live thread: receives the UDP live stream (LIVE_SUBSCRIBE) and keeps only the newest
     frame, so a late frame is never drawn after a newer one.
 
-Views: Main (live view + run controls), Calibration, Firmware. Debug mode (menu View, only for
-debug firmware) adds Settings (WiFi credentials), Errors, Diagnostics, CLI and a request log.
+Dark-only UI. Views: Live (LED strip, tempo, level, tone, spectrum + run controls), Calibration,
+Firmware (device details, update). The Debug toggle (top bar, only for debug firmware) adds
+Settings (WiFi credentials), Errors, Diagnostics, CLI and a request log.
 
     python Host/ledapp.py [--device IP] [--debug]
 """
@@ -45,6 +46,7 @@ KEEPALIVE_S = 1.0           # < firmware NET_LIVE_LEASE_MS (3 s)
 RECONNECT_S = 2.0
 PARAM_DEBOUNCE_MS = 60
 FRAME_MS = 15
+AUDIO_BANDS_DEFAULT = 12    # spectrum slots drawn before the first frame arrives
 
 
 # ---------------------------------------------------------------------------
@@ -304,8 +306,133 @@ def discover(timeout: float = 1.0) -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# UI
+# UI theme (dark only)
 # ---------------------------------------------------------------------------
+
+C = {
+    "bg": "#0d0f14", "panel": "#151820", "panel2": "#1c2029", "line": "#262b36", "socket": "#20242d",
+    "text": "#e8eaf0", "muted": "#8b92a1", "faint": "#555c6a",
+    "accent": "#6d8dff", "accent_hi": "#8aa3ff", "ok": "#3ddc97", "warn": "#f5b14c", "bad": "#ff6470",
+}
+FONT = ("Segoe UI", 10)
+FONT_SM = ("Segoe UI", 9)
+FONT_H = ("Segoe UI Semibold", 11)
+FONT_NUM = ("Segoe UI Semibold", 28)
+FONT_MONO = ("Consolas", 10)
+
+
+def mix(c1: str, c2: str, t: float) -> str:
+    """Blend two #rrggbb colours (t = 0 -> c1, 1 -> c2)."""
+    a, b = int(c1[1:], 16), int(c2[1:], 16)
+    ch = [round(((a >> s) & 255) * (1 - t) + ((b >> s) & 255) * t) for s in (16, 8, 0)]
+    return "#%02x%02x%02x" % tuple(ch)
+
+
+def apply_theme(root: tk.Tk) -> None:
+    root.configure(bg=C["bg"])
+    st = ttk.Style(root)
+    st.theme_use("clam")
+    st.configure(".", background=C["bg"], foreground=C["text"], fieldbackground=C["panel2"],
+                 bordercolor=C["line"], lightcolor=C["panel2"], darkcolor=C["panel2"], troughcolor=C["panel2"],
+                 focuscolor=C["panel2"], selectbackground=C["accent"], selectforeground="#ffffff",
+                 insertcolor=C["text"], arrowcolor=C["muted"], font=FONT, borderwidth=0)
+    st.map(".", foreground=[("disabled", C["faint"])])
+    for name, bg in (("", C["bg"]), ("Card.", C["panel"])):
+        st.configure(f"{name}TFrame", background=bg)
+        st.configure(f"{name}TLabel", background=bg)
+        st.configure(f"{name}TCheckbutton", background=bg, indicatorbackground=C["panel2"],
+                     indicatorforeground="#ffffff", indicatormargin=(0, 0, 8, 0), padding=2)
+        st.map(f"{name}TCheckbutton", background=[("active", bg)],
+               indicatorbackground=[("selected", C["accent"]), ("active", C["line"])])
+        st.configure(f"{name}TRadiobutton", background=bg, indicatorbackground=C["panel2"],
+                     indicatorforeground="#ffffff", indicatormargin=(0, 0, 8, 0), padding=2)
+        st.map(f"{name}TRadiobutton", background=[("active", bg)],
+               indicatorbackground=[("selected", C["accent"]), ("active", C["line"])])
+        st.configure(f"{name}Horizontal.TScale", background=C["accent"], troughcolor=C["panel2"],
+                     lightcolor=C["accent"], darkcolor=C["accent"], bordercolor=bg, sliderlength=12, gripcount=0)
+        st.map(f"{name}Horizontal.TScale", background=[("active", C["accent_hi"]), ("disabled", C["line"])])
+    st.configure("Muted.TLabel", foreground=C["muted"])
+    st.configure("Card.Muted.TLabel", background=C["panel"], foreground=C["muted"], font=FONT_SM)
+    st.configure("Title.TLabel", background=C["panel"], font=FONT_H)
+    st.configure("Status.TLabel", background=C["bg"], foreground=C["muted"])
+
+    st.configure("TButton", background=C["panel2"], foreground=C["text"], padding=(14, 6), relief="flat")
+    st.map("TButton", background=[("pressed", C["line"]), ("active", C["line"]), ("disabled", C["panel"])])
+    st.configure("Accent.TButton", background=C["accent"], foreground="#ffffff")
+    st.map("Accent.TButton", background=[("pressed", C["accent"]), ("active", C["accent_hi"]),
+                                          ("disabled", C["panel2"])])
+    st.configure("Seg.TButton", background=C["panel2"], foreground=C["muted"], padding=(10, 6))
+    st.map("Seg.TButton", background=[("active", C["line"])])
+    st.configure("SegOn.TButton", background=C["accent"], foreground="#ffffff", padding=(10, 6))
+    st.map("SegOn.TButton", background=[("active", C["accent_hi"])])
+
+    for w in ("TEntry", "TCombobox", "TSpinbox"):
+        st.configure(w, fieldbackground=C["panel2"], foreground=C["text"], bordercolor=C["line"],
+                     lightcolor=C["panel2"], darkcolor=C["panel2"], padding=5, borderwidth=1,
+                     background=C["panel2"], arrowsize=12)
+        st.map(w, bordercolor=[("focus", C["accent"])], lightcolor=[("focus", C["accent"])],
+               fieldbackground=[("readonly", C["panel2"]), ("disabled", C["panel"])],
+               foreground=[("disabled", C["faint"])], background=[("active", C["line"])],
+               selectbackground=[("readonly", C["panel2"])], selectforeground=[("readonly", C["text"])])
+    root.option_add("*TCombobox*Listbox.background", C["panel2"])
+    root.option_add("*TCombobox*Listbox.foreground", C["text"])
+    root.option_add("*TCombobox*Listbox.selectBackground", C["accent"])
+    root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+    root.option_add("*TCombobox*Listbox.font", FONT)
+    root.option_add("*TCombobox*Listbox.borderWidth", 0)
+
+    st.configure("TNotebook", background=C["bg"], borderwidth=0, tabmargins=(0, 0, 0, 0),
+                 bordercolor=C["bg"], lightcolor=C["bg"], darkcolor=C["bg"])
+    st.configure("TNotebook.Tab", background=C["bg"], foreground=C["muted"], padding=(18, 8), borderwidth=0,
+                 bordercolor=C["bg"], lightcolor=C["bg"], darkcolor=C["bg"], font=FONT)
+    st.map("TNotebook.Tab", background=[("selected", C["panel"]), ("active", C["panel2"])],
+           foreground=[("selected", C["text"]), ("active", C["text"])],
+           lightcolor=[("selected", C["panel"])], bordercolor=[("selected", C["panel"])],
+           expand=[("selected", (0, 0, 0, 0))], padding=[("selected", (18, 8))])
+    # flat notebook: tab strip + client area without the clam frame
+    st.layout("TNotebook", [("Notebook.client", {"sticky": "nswe"})])
+    st.layout("TNotebook.Tab", [("Notebook.tab", {"sticky": "nswe", "children": [
+        ("Notebook.padding", {"side": "top", "sticky": "nswe", "children": [
+            ("Notebook.label", {"side": "top", "sticky": ""})]})]})])
+    st.configure("Treeview", background=C["panel"], fieldbackground=C["panel"], foreground=C["text"],
+                 rowheight=26, borderwidth=0)
+    st.map("Treeview", background=[("selected", C["accent"])])
+    st.configure("Treeview.Heading", background=C["panel2"], foreground=C["muted"], relief="flat", padding=6)
+    st.map("Treeview.Heading", background=[("active", C["line"])])
+    st.configure("Vertical.TScrollbar", background=C["panel2"], troughcolor=C["bg"], arrowcolor=C["muted"],
+                 bordercolor=C["bg"], lightcolor=C["panel2"], darkcolor=C["panel2"], gripcount=0)
+    st.map("Vertical.TScrollbar", background=[("active", C["line"])])
+    st.configure("Horizontal.TProgressbar", background=C["accent"], troughcolor=C["panel2"], thickness=8,
+                 bordercolor=C["panel"], lightcolor=C["accent"], darkcolor=C["accent"])
+
+
+def dark_title_bar(root: tk.Tk) -> None:
+    """Ask Windows 10/11 for a dark window frame (no effect elsewhere)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        root.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+        on = ctypes.c_int(1)
+        for attr in (20, 19):           # DWMWA_USE_IMMERSIVE_DARK_MODE (new / pre-20H1 id)
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(on), ctypes.sizeof(on)) == 0:
+                break
+    except (AttributeError, OSError):
+        pass
+
+
+def card(parent: tk.Widget, title: str = "", subtitle: str = "", padding: int = 16) -> ttk.Frame:
+    """Raised panel with an optional title; returns the content frame."""
+    outer = ttk.Frame(parent, style="Card.TFrame", padding=padding)
+    if title:
+        head = ttk.Frame(outer, style="Card.TFrame")
+        head.pack(fill="x", pady=(0, 10))
+        ttk.Label(head, text=title, style="Title.TLabel").pack(side="left")
+        if subtitle:
+            ttk.Label(head, text=subtitle, style="Card.Muted.TLabel").pack(side="left", padx=(10, 0))
+        outer.head = head          # type: ignore[attr-defined]
+    return outer
 
 
 class ScrollFrame(ttk.Frame):
@@ -313,7 +440,7 @@ class ScrollFrame(ttk.Frame):
 
     def __init__(self, parent: tk.Widget) -> None:
         super().__init__(parent)
-        self.canvas = tk.Canvas(self, highlightthickness=0)
+        self.canvas = tk.Canvas(self, highlightthickness=0, background=C["bg"])
         sb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
         self.body = ttk.Frame(self.canvas)
         self.body.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
@@ -363,13 +490,19 @@ class App:
         self.beat_until = 0.0
         self.loaded_settings: dict[int, int | str] = {}
 
-        root.title("LED Strip Host")
-        root.geometry("1000x700")
-        root.minsize(720, 520)
-        self._build_menu()
-        self._build_connection_bar()
+        self.band_disp: list[float] = []
+        self.band_peak: list[float] = []
+
+        root.title("LED Strip")
+        root.geometry("1180x760")
+        root.minsize(640, 520)
+        apply_theme(root)
+        dark_title_bar(root)
+        self.debug_var = tk.BooleanVar(value=bool(self.cfg["debug_mode"]))
+        self.rate_var = tk.StringVar(value=f"{int(self.cfg['live_hz'])} Hz")
+        self._build_top_bar()
         self.nb = ttk.Notebook(root)
-        self.nb.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.nb.pack(fill="both", expand=True, padx=16, pady=(0, 16))
         self._build_main_tab()
         self._build_calib_tab()
         self._build_fw_tab()
@@ -404,181 +537,257 @@ class App:
 
     # -- layout ---------------------------------------------------------------------
 
-    def _build_menu(self) -> None:
-        bar = tk.Menu(self.root)
-        view = tk.Menu(bar, tearoff=False)
-        self.debug_var = tk.BooleanVar(value=bool(self.cfg["debug_mode"]))
-        view.add_checkbutton(label="Debug mode", variable=self.debug_var, command=self._toggle_debug)
-        rate = tk.Menu(view, tearoff=False)
-        self.rate_var = tk.IntVar(value=int(self.cfg["live_hz"]))
-        for hz in (30, 60, 100):
-            rate.add_radiobutton(label=f"{hz} Hz", value=hz, variable=self.rate_var, command=self._set_rate)
-        view.add_cascade(label="Live rate", menu=rate)
-        bar.add_cascade(label="View", menu=view)
-        self.root.config(menu=bar)
-
-    def _build_connection_bar(self) -> None:
-        f = ttk.Frame(self.root, padding=8)
+    def _build_top_bar(self) -> None:
+        f = ttk.Frame(self.root, padding=(16, 12))
         f.pack(fill="x")
-        ttk.Label(f, text="Device").pack(side="left")
+        self.status_dot = tk.Canvas(f, width=10, height=10, background=C["bg"], highlightthickness=0)
+        self.status_dot.pack(side="left")
+        self.status_dot_item = self.status_dot.create_oval(1, 1, 9, 9, fill=C["faint"], width=0)
+        self.status_var = tk.StringVar(value="Not connected")
+        ttk.Label(f, textvariable=self.status_var, style="Status.TLabel").pack(side="left", padx=(8, 0))
+
+        ttk.Checkbutton(f, text="Debug", variable=self.debug_var, command=self._toggle_debug).pack(side="right")
+        self.conn_btn = ttk.Button(f, text="Connect", style="Accent.TButton", command=self._connect_toggle)
+        self.conn_btn.pack(side="right", padx=(8, 16))
+        ttk.Button(f, text="Scan", command=self._scan).pack(side="right", padx=(8, 0))
         self.dev_var = tk.StringVar(value=self.cfg["device"])
-        self.dev_combo = ttk.Combobox(f, textvariable=self.dev_var, width=22)
-        self.dev_combo.pack(side="left", padx=4)
+        self.dev_combo = ttk.Combobox(f, textvariable=self.dev_var, width=18)
+        self.dev_combo.pack(side="right")
         self.dev_combo.bind("<Return>", lambda e: self._connect())
-        ttk.Button(f, text="Scan", command=self._scan).pack(side="left")
-        self.conn_btn = ttk.Button(f, text="Connect", command=self._connect_toggle)
-        self.conn_btn.pack(side="left", padx=4)
-        self.status_var = tk.StringVar(value="not connected")
-        ttk.Label(f, textvariable=self.status_var).pack(side="left", padx=8)
-        self.stats_var = tk.StringVar()
-        ttk.Label(f, textvariable=self.stats_var, foreground="#666").pack(side="right")
+        self.dev_combo.bind("<<ComboboxSelected>>", lambda e: self._connect())
+
+    def _set_status(self, text: str, state: str = "idle") -> None:
+        self.status_var.set(text)
+        color = {"ok": C["ok"], "busy": C["warn"], "error": C["bad"]}.get(state, C["faint"])
+        self.status_dot.itemconfigure(self.status_dot_item, fill=color)
 
     def _build_main_tab(self) -> None:
-        tab = ttk.Frame(self.nb, padding=8)
-        self.nb.add(tab, text="Main")
+        tab = ttk.Frame(self.nb, padding=(0, 16, 0, 0))
+        self.nb.add(tab, text="Live")
+        self.main_tab = tab
 
-        top = ttk.Frame(tab)
-        top.pack(fill="x")
-        self.info_var = tk.StringVar(value="-")
-        ttk.Label(top, textvariable=self.info_var, justify="left").pack(side="left", anchor="n")
+        # live view: one canvas, laid out on resize, updated in place per frame
+        self.live_card = ttk.Frame(tab, style="Card.TFrame")
+        self.cv = tk.Canvas(self.live_card, background=C["panel"], highlightthickness=0)
+        self.cv.pack(fill="both", expand=True, padx=4, pady=4)
+        self.cv.bind("<Configure>", lambda e: self._layout_live())
+        self.led_items: list[tuple[int, int]] = []
+        self.led_colors: list[str] = []
+        self.band_items: list[tuple[int, int]] = []
+        self.stats_item = self.cv.create_text(0, 0, text="")    # replaced by _layout_live
 
-        ctl = ttk.LabelFrame(top, text="Run", padding=8)
-        ctl.pack(side="right")
+        # controls
+        side = card(tab, "Controls")
+        self.side = side
+        g = ttk.Frame(side, style="Card.TFrame")
+        g.pack(fill="x")
+        g.columnconfigure(0, weight=1)
+        ttk.Label(g, text="Source", style="Card.Muted.TLabel").grid(row=0, column=0, sticky="w")
+        seg = ttk.Frame(g, style="Card.TFrame")
+        seg.grid(row=1, column=0, sticky="ew", pady=(4, 14))
+        seg.columnconfigure((0, 1), weight=1, uniform="seg")
         self.run_mode_var = tk.IntVar(value=0)
-        ttk.Radiobutton(ctl, text="Audio", value=0, variable=self.run_mode_var,
-                        command=lambda: self._run_config(run_mode=self.run_mode_var.get())).grid(row=0, column=0)
-        ttk.Radiobutton(ctl, text="Pattern", value=1, variable=self.run_mode_var,
-                        command=lambda: self._run_config(run_mode=self.run_mode_var.get())).grid(row=0, column=1)
-        ttk.Label(ctl, text="Algorithm").grid(row=1, column=0, sticky="w")
-        self.algo_combo = ttk.Combobox(ctl, state="readonly", width=24)
-        self.algo_combo.grid(row=1, column=1, sticky="ew", pady=2)
+        self.seg_btns = [ttk.Button(seg, text=t, command=lambda m=m: self._set_run_mode(m))
+                         for m, t in ((0, "Audio"), (1, "Pattern"))]
+        for i, b in enumerate(self.seg_btns):
+            b.grid(row=0, column=i, sticky="ew", padx=(0, 4) if i == 0 else (4, 0))
+        self._update_seg()
+
+        ttk.Label(g, text="Algorithm", style="Card.Muted.TLabel").grid(row=2, column=0, sticky="w")
+        self.algo_combo = ttk.Combobox(g, state="readonly")
+        self.algo_combo.grid(row=3, column=0, sticky="ew", pady=(4, 14))
         self.algo_combo.bind("<<ComboboxSelected>>",
                              lambda e: self._run_config(algorithm=self.algo_combo.current()))
-        ttk.Label(ctl, text="Pattern").grid(row=2, column=0, sticky="w")
+        ttk.Label(g, text="Pattern", style="Card.Muted.TLabel").grid(row=4, column=0, sticky="w")
         self.pattern_var = tk.IntVar(value=0)
-        self.pattern_spin = ttk.Spinbox(ctl, from_=0, to=0, textvariable=self.pattern_var, width=5,
+        self.pattern_spin = ttk.Spinbox(g, from_=0, to=0, textvariable=self.pattern_var, width=6,
                                         command=lambda: self._run_config(pattern=self.pattern_var.get()))
-        self.pattern_spin.grid(row=2, column=1, sticky="w", pady=2)
-        ttk.Label(ctl, text="Brightness").grid(row=3, column=0, sticky="w")
+        self.pattern_spin.grid(row=5, column=0, sticky="w", pady=(4, 14))
+
+        bh = ttk.Frame(g, style="Card.TFrame")
+        bh.grid(row=6, column=0, sticky="ew")
+        ttk.Label(bh, text="Brightness", style="Card.Muted.TLabel").pack(side="left")
         self.bri_var = tk.IntVar(value=0)
-        bri = ttk.Scale(ctl, from_=0, to=254, variable=self.bri_var, length=180)   # 255 = "unchanged"
-        bri.grid(row=3, column=1, sticky="ew", pady=2)
+        self.bri_label = ttk.Label(bh, text="0%", style="Card.Muted.TLabel")
+        self.bri_label.pack(side="right")
+        bri = ttk.Scale(g, from_=0, to=254, variable=self.bri_var, style="Card.Horizontal.TScale",   # 255 = "unchanged"
+                        command=lambda v: self.bri_label.configure(text=f"{round(float(v) / 2.54)}%"))
+        bri.grid(row=7, column=0, sticky="ew", pady=(6, 18))
         bri.bind("<ButtonRelease-1>", lambda e: self._run_config(brightness=int(self.bri_var.get())))
 
+        lv = ttk.Frame(g, style="Card.TFrame")
+        lv.grid(row=8, column=0, sticky="ew")
         self.live_on = tk.BooleanVar(value=True)
-        ttk.Checkbutton(tab, text="Live view", variable=self.live_on, command=self._toggle_live).pack(anchor="w",
-                                                                                                    pady=(8, 0))
-        self.cv = tk.Canvas(tab, background="#111", highlightthickness=0)
-        self.cv.pack(fill="both", expand=True, pady=(4, 0))
-        self.cv.bind("<Configure>", lambda e: self._layout_live())
-        self.led_items: list[int] = []
-        self.led_colors: list[str] = []
-        self.band_items: list[int] = []
+        ttk.Checkbutton(lv, text="Live view", variable=self.live_on, style="Card.TCheckbutton",
+                        command=self._toggle_live).pack(side="left")
+        rate = ttk.Combobox(lv, textvariable=self.rate_var, values=("30 Hz", "60 Hz", "100 Hz"), state="readonly",
+                            width=7)
+        rate.pack(side="right")
+        rate.bind("<<ComboboxSelected>>", lambda e: self._set_rate())
+
+        self.main_wide: bool | None = None
+        tab.bind("<Configure>", self._relayout_main)
+
+    def _relayout_main(self, e: tk.Event) -> None:
+        """Side panel right of the live view on wide windows, below it on narrow ones."""
+        wide = e.width >= 700
+        if wide == self.main_wide:
+            return
+        self.main_wide = wide
+        self.live_card.grid_forget()
+        self.side.grid_forget()
+        tab = self.main_tab
+        if wide:
+            self.live_card.grid(row=0, column=0, sticky="nsew")
+            self.side.grid(row=0, column=1, sticky="ns", padx=(16, 0))
+            tab.columnconfigure(0, weight=1)
+            tab.columnconfigure(1, weight=0, minsize=240)
+            tab.rowconfigure(0, weight=1)
+            tab.rowconfigure(1, weight=0)
+        else:
+            self.live_card.grid(row=0, column=0, sticky="nsew")
+            self.side.grid(row=1, column=0, sticky="ew", pady=(16, 0))
+            tab.columnconfigure(0, weight=1)
+            tab.columnconfigure(1, weight=0, minsize=0)
+            tab.rowconfigure(0, weight=1)
+
+    def _set_run_mode(self, mode: int) -> None:
+        self.run_mode_var.set(mode)
+        self._update_seg()
+        self._run_config(run_mode=mode)
+
+    def _update_seg(self) -> None:
+        for m, b in enumerate(self.seg_btns):
+            b.configure(style="SegOn.TButton" if m == self.run_mode_var.get() else "Seg.TButton")
 
     def _build_calib_tab(self) -> None:
-        tab = ttk.Frame(self.nb, padding=8)
+        tab = ttk.Frame(self.nb, padding=(0, 16, 0, 0))
         self.nb.add(tab, text="Calibration")
-        bar = ttk.Frame(tab)
+        bar = card(tab, padding=12)
         bar.pack(fill="x")
-        self.calib_btn = ttk.Button(bar, text="Enter calibration mode", command=self._toggle_calib)
+        self.calib_btn = ttk.Button(bar, text="Enter calibration", style="Accent.TButton", command=self._toggle_calib)
         self.calib_btn.pack(side="left")
-        ttk.Label(bar, text="Show").pack(side="left", padx=(12, 2))
-        self.calib_filter = ttk.Combobox(bar, state="readonly", width=26)
-        self.calib_filter.pack(side="left")
+        self.calib_filter = ttk.Combobox(bar, state="readonly", width=28)
+        self.calib_filter.pack(side="left", padx=(12, 0))
         self.calib_filter.bind("<<ComboboxSelected>>", lambda e: self._build_param_editors())
-        for text, cmd in (("Save", self._calib_save), ("Reload", self._calib_reload),
-                          ("Reset all", self._calib_reset), ("Export...", self._calib_export),
-                          ("Import...", self._calib_import)):
-            ttk.Button(bar, text=text, command=cmd).pack(side="left", padx=2)
         self.dirty_var = tk.StringVar()
-        ttk.Label(bar, textvariable=self.dirty_var, foreground="#c60").pack(side="left", padx=8)
+        ttk.Label(bar, textvariable=self.dirty_var, style="Card.TLabel", foreground=C["warn"]).pack(side="left",
+                                                                                                padx=12)
+        for text, cmd in (("Import", self._calib_import), ("Export", self._calib_export),
+                          ("Reset all", self._calib_reset), ("Reload", self._calib_reload)):
+            ttk.Button(bar, text=text, command=cmd).pack(side="right", padx=(6, 0))
+        self.save_btn = ttk.Button(bar, text="Save", style="Accent.TButton", command=self._calib_save)
+        self.save_btn.pack(side="right", padx=(6, 0))
         self.param_area = ScrollFrame(tab)
-        self.param_area.pack(fill="both", expand=True, pady=(8, 0))
+        self.param_area.pack(fill="both", expand=True, pady=(16, 0))
         self.param_vars: dict[tuple[int, int], tk.Variable] = {}
         self.param_widgets: list[tk.Widget] = []
 
     def _build_fw_tab(self) -> None:
-        tab = ttk.Frame(self.nb, padding=8)
+        tab = ttk.Frame(self.nb, padding=(0, 16, 0, 0))
         self.nb.add(tab, text="Firmware")
+
+        dev = card(tab, "Device")
+        dev.pack(fill="x")
+        self.dev_grid = ttk.Frame(dev, style="Card.TFrame")
+        self.dev_grid.pack(fill="x")
+        self._show_device_rows([("Status", "Not connected")])
+
+        up = card(tab, "Update")
+        up.pack(fill="x", pady=(16, 0))
         self.fw_target = tk.IntVar(value=P.FwTarget.APP)
-        ttk.Radiobutton(tab, text="Application image (.bin)", value=P.FwTarget.APP,
-                        variable=self.fw_target).grid(row=0, column=0, sticky="w")
-        ttk.Radiobutton(tab, text="Calibration region image", value=P.FwTarget.CALIB,
-                        variable=self.fw_target).grid(row=1, column=0, sticky="w")
+        ttk.Radiobutton(up, text="Application image (.bin)", value=P.FwTarget.APP, style="Card.TRadiobutton",
+                        variable=self.fw_target).pack(anchor="w")
+        ttk.Radiobutton(up, text="Calibration region image", value=P.FwTarget.CALIB, style="Card.TRadiobutton",
+                        variable=self.fw_target).pack(anchor="w", pady=(2, 10))
+        row = ttk.Frame(up, style="Card.TFrame")
+        row.pack(fill="x")
         self.fw_file = tk.StringVar()
-        ttk.Entry(tab, textvariable=self.fw_file, width=60).grid(row=2, column=0, sticky="ew", pady=6)
-        ttk.Button(tab, text="Browse...", command=self._fw_browse).grid(row=2, column=1, padx=4)
-        btns = ttk.Frame(tab)
-        btns.grid(row=3, column=0, sticky="w")
-        self.fw_btn = ttk.Button(btns, text="Upload", command=self._fw_upload)
-        self.fw_btn.pack(side="left")
-        ttk.Button(btns, text="Abort", command=self.fw_abort.set).pack(side="left", padx=4)
-        ttk.Button(btns, text="Download calibration image...", command=self._calib_download).pack(side="left",
-                                                                                                  padx=12)
-        self.fw_prog = ttk.Progressbar(tab, maximum=1.0, length=400)
-        self.fw_prog.grid(row=4, column=0, sticky="ew", pady=6)
+        ttk.Entry(row, textvariable=self.fw_file).pack(side="left", fill="x", expand=True)
+        ttk.Button(row, text="Browse", command=self._fw_browse).pack(side="left", padx=(8, 0))
+        self.fw_prog = ttk.Progressbar(up, maximum=1.0)
+        self.fw_prog.pack(fill="x", pady=(14, 6))
         self.fw_msg = tk.StringVar()
-        ttk.Label(tab, textvariable=self.fw_msg).grid(row=5, column=0, sticky="w")
-        tab.columnconfigure(0, weight=1)
+        ttk.Label(up, textvariable=self.fw_msg, style="Card.Muted.TLabel").pack(anchor="w")
+        btns = ttk.Frame(up, style="Card.TFrame")
+        btns.pack(fill="x", pady=(12, 0))
+        self.fw_btn = ttk.Button(btns, text="Upload", style="Accent.TButton", command=self._fw_upload)
+        self.fw_btn.pack(side="left")
+        ttk.Button(btns, text="Abort", command=self.fw_abort.set).pack(side="left", padx=(8, 0))
+        ttk.Button(btns, text="Download calibration image", command=self._calib_download).pack(side="right")
+
+    def _show_device_rows(self, rows: list[tuple[str, str]]) -> None:
+        for w in self.dev_grid.winfo_children():
+            w.destroy()
+        for r, (k, v) in enumerate(rows):
+            ttk.Label(self.dev_grid, text=k, style="Card.Muted.TLabel").grid(row=r, column=0, sticky="w",
+                                                                             padx=(0, 32), pady=2)
+            ttk.Label(self.dev_grid, text=v, style="Card.TLabel").grid(row=r, column=1, sticky="w", pady=2)
 
     def _build_debug_tab(self) -> None:
-        self.dbg_tab = ttk.Frame(self.nb, padding=8)
+        self.dbg_tab = ttk.Frame(self.nb, padding=(0, 16, 0, 0))
         sub = ttk.Notebook(self.dbg_tab)
         sub.pack(fill="both", expand=True)
 
         # settings (WiFi credentials etc.)
-        st = ttk.Frame(sub, padding=8)
+        st = ttk.Frame(sub, style="Card.TFrame", padding=20)
         sub.add(st, text="Settings")
+        labels = {"device_name": "Device name", "sta_ssid": "WiFi network (SSID)", "sta_password": "WiFi password",
+                  "max_current_ma": "Current limit [mA]", "num_leds": "LED count", "color_order": "Colour order"}
         self.set_vars: dict[str, tk.StringVar] = {}
         for row, sdef in enumerate(s for s in P.SETTINGS if s.id in (1, 3, 4, 8, 9, 14)):
-            ttk.Label(st, text=sdef.name).grid(row=row, column=0, sticky="w", pady=2)
+            ttk.Label(st, text=labels[sdef.name], style="Card.Muted.TLabel").grid(row=row, column=0, sticky="w",
+                                                                                 pady=6, padx=(0, 16))
             var = tk.StringVar()
             self.set_vars[sdef.name] = var
             if sdef.name == "color_order":
                 w: tk.Widget = ttk.Combobox(st, textvariable=var, values=P.COLOR_ORDERS, state="readonly", width=8)
             else:
-                w = ttk.Entry(st, textvariable=var, width=36, show="*" if sdef.name == "sta_password" else "")
+                w = ttk.Entry(st, textvariable=var, width=36, show="•" if sdef.name == "sta_password" else "")
                 if sdef.name == "sta_password":
                     self.pw_entry = w
-            w.grid(row=row, column=1, sticky="w", pady=2)
+            w.grid(row=row, column=1, sticky="w", pady=6)
         self.pw_show = tk.BooleanVar()
-        ttk.Checkbutton(st, text="show", variable=self.pw_show,
-                        command=lambda: self.pw_entry.configure(show="" if self.pw_show.get() else "*")).grid(
-            row=2, column=2, sticky="w")
-        b = ttk.Frame(st)
-        b.grid(row=10, column=0, columnspan=3, sticky="w", pady=8)
-        ttk.Button(b, text="Load", command=self._settings_load).pack(side="left")
-        ttk.Button(b, text="Apply", command=self._settings_apply).pack(side="left", padx=4)
-        ttk.Button(b, text="Reboot device", command=self._reboot).pack(side="left", padx=4)
-        ttk.Button(b, text="Factory reset...", command=self._factory_reset).pack(side="left", padx=4)
+        ttk.Checkbutton(st, text="Show", variable=self.pw_show, style="Card.TCheckbutton",
+                        command=lambda: self.pw_entry.configure(show="" if self.pw_show.get() else "•")).grid(
+            row=2, column=2, sticky="w", padx=(8, 0))
+        b = ttk.Frame(st, style="Card.TFrame")
+        b.grid(row=10, column=0, columnspan=3, sticky="w", pady=(16, 8))
+        ttk.Button(b, text="Apply", style="Accent.TButton", command=self._settings_apply).pack(side="left")
+        ttk.Button(b, text="Reload", command=self._settings_load).pack(side="left", padx=(8, 0))
+        ttk.Button(b, text="Reboot device", command=self._reboot).pack(side="left", padx=(8, 0))
+        ttk.Button(b, text="Factory reset", command=self._factory_reset).pack(side="left", padx=(8, 0))
         self.set_msg = tk.StringVar(value="Network changes take effect after a reboot.")
-        ttk.Label(st, textvariable=self.set_msg).grid(row=11, column=0, columnspan=3, sticky="w")
+        ttk.Label(st, textvariable=self.set_msg, style="Card.Muted.TLabel").grid(row=11, column=0, columnspan=3,
+                                                                                 sticky="w")
 
         # errors
-        er = ttk.Frame(sub, padding=8)
+        er = ttk.Frame(sub, style="Card.TFrame", padding=16)
         sub.add(er, text="Errors")
-        self.err_tree = self._tree(er, ("code", "name", "severity", "count", "last [ms]"))
-        b = ttk.Frame(er)
-        b.pack(fill="x", pady=4)
+        b = ttk.Frame(er, style="Card.TFrame")
+        b.pack(fill="x", pady=(0, 12))
         ttk.Button(b, text="Refresh", command=self._errors_load).pack(side="left")
-        ttk.Button(b, text="Clear", command=self._errors_clear).pack(side="left", padx=4)
+        ttk.Button(b, text="Clear", command=self._errors_clear).pack(side="left", padx=(8, 0))
+        self.err_tree = self._tree(er, ("code", "name", "severity", "count", "last [ms]"))
 
         # diagnostics
-        dg = ttk.Frame(sub, padding=8)
+        dg = ttk.Frame(sub, style="Card.TFrame", padding=16)
         sub.add(dg, text="Diagnostics")
-        self.diag_tree = self._tree(dg, ("group", "name", "value", "unit"))
-        b = ttk.Frame(dg)
-        b.pack(fill="x", pady=4)
+        b = ttk.Frame(dg, style="Card.TFrame")
+        b.pack(fill="x", pady=(0, 12))
         ttk.Button(b, text="Refresh", command=self._diag_load).pack(side="left")
-        ttk.Button(b, text="Reset max/min", command=self._diag_reset).pack(side="left", padx=4)
+        ttk.Button(b, text="Reset max/min", command=self._diag_reset).pack(side="left", padx=(8, 0))
+        self.diag_tree = self._tree(dg, ("group", "name", "value", "unit"))
 
         # CLI
-        cl = ttk.Frame(sub, padding=8)
+        cl = ttk.Frame(sub, style="Card.TFrame", padding=16)
         sub.add(cl, text="CLI")
-        self.cli_out = tk.Text(cl, height=20, font=("Consolas", 10), state="disabled")
+        self.cli_out = tk.Text(cl, height=20, font=FONT_MONO, state="disabled", background=C["bg"],
+                               foreground=C["text"], insertbackground=C["text"], relief="flat", borderwidth=0,
+                               highlightthickness=0, padx=10, pady=8, selectbackground=C["accent"])
         self.cli_out.pack(fill="both", expand=True)
-        self.cli_in = ttk.Entry(cl, font=("Consolas", 10))
-        self.cli_in.pack(fill="x", pady=(4, 0))
+        self.cli_in = ttk.Entry(cl, font=FONT_MONO)
+        self.cli_in.pack(fill="x", pady=(10, 0))
         self.cli_in.bind("<Return>", self._cli_send)
         self.cli_in.bind("<Up>", lambda e: self._cli_hist(-1))
         self.cli_in.bind("<Down>", lambda e: self._cli_hist(1))
@@ -586,15 +795,17 @@ class App:
         self.cli_pos = 0
 
         # request log
-        lg = ttk.Frame(sub, padding=8)
+        lg = ttk.Frame(sub, style="Card.TFrame", padding=16)
         sub.add(lg, text="Log")
-        self.log_list = tk.Listbox(lg, font=("Consolas", 9))
+        self.log_list = tk.Listbox(lg, font=FONT_MONO, background=C["bg"], foreground=C["muted"], relief="flat",
+                                   borderwidth=0, highlightthickness=0, selectbackground=C["accent"],
+                                   activestyle="none")
         self.log_list.pack(fill="both", expand=True)
 
     def _tree(self, parent: tk.Widget, cols: tuple[str, ...]) -> ttk.Treeview:
         t = ttk.Treeview(parent, columns=cols, show="headings", height=14)
         for c in cols:
-            t.heading(c, text=c)
+            t.heading(c, text=c, anchor="w")
             t.column(c, width=120, anchor="w")
         t.pack(fill="both", expand=True)
         return t
@@ -635,15 +846,15 @@ class App:
         try:
             socket.inet_aton(host)
         except OSError:
-            self.status_var.set("enter the device IP address or use Scan")
+            self._set_status("Enter the device IP address or use Scan", "error")
             return
         self.cfg["device"] = host
-        self.status_var.set(f"connecting to {host}...")
-        self.conn_btn.configure(text="Disconnect")
+        self._set_status(f"Connecting to {host}…", "busy")
+        self.conn_btn.configure(text="Disconnect", style="TButton")
         self.worker.connect(host)
 
     def _scan(self) -> None:
-        self.status_var.set("scanning...")
+        self._set_status("Scanning…", "busy")
 
         def run() -> None:
             found = discover()
@@ -651,12 +862,11 @@ class App:
         threading.Thread(target=run, daemon=True).start()
 
     def _scan_done(self, found: list[dict[str, Any]]) -> None:
-        entries = [f"{d['ip']}  ({d['name']}, fw {d['fw']})" for d in found]
-        self.dev_combo.configure(values=entries)
+        self.dev_combo.configure(values=[d["ip"] for d in found])
         if not found:
-            self.status_var.set("no device found (is it on the same network?)")
+            self._set_status("No device found - is it on the same network?", "error")
             return
-        self.status_var.set(f"found {len(found)} device(s)")
+        self._set_status(f"Found {len(found)} device{'s' if len(found) > 1 else ''}")
         if not self.worker.target:
             self.dev_var.set(found[0]["ip"])
             self._connect()
@@ -665,7 +875,15 @@ class App:
         if self.connected:
             self.connected = False
             self.live.latest = None
-        self.status_var.set(why if self.worker.target else "not connected")
+            self._layout_live()
+            self._show_device_rows([("Status", "Not connected")])
+        if not self.worker.target:
+            self._set_status("Not connected")
+            self.conn_btn.configure(text="Connect", style="Accent.TButton")
+        elif why == "connecting":
+            self._set_status(f"Connecting to {self.worker.target}…", "busy")
+        else:
+            self._set_status(why[:1].upper() + why[1:] + " - retrying", "error")
 
     def _fetch_on_connect(self, link: Link) -> None:
         """Worker thread: everything the UI needs, once per (re)connect."""
@@ -694,17 +912,21 @@ class App:
         build = "debug" if info.has(BuildFlag.INTERNAL_TEST_BUILD) else "release"
         if info.proto_version != P.PROTO_VERSION:
             build += f", PROTOCOL v{info.proto_version} (host v{P.PROTO_VERSION})"
-        self.status_var.set(f"connected to {info.device_name} ({info.ip_address or self.live.device_ip})")
-        self.info_var.set(f"{info.device_name}\nfirmware {info.fw_version} ({build})\nbuilt {info.build_date}\n"
-                          f"{info.num_leds} LEDs, {info.sample_rate_hz} Hz, hop {info.hop_size}\n"
-                          f"WiFi {info.rssi_dbm} dBm, reset reason {info.reset_reason}")
+        self._set_status(f"Connected · {self.live.device_ip}", "ok")
+        self._show_device_rows([
+            ("Name", info.device_name), ("Firmware", f"{info.fw_version}  ({build})"), ("Built", info.build_date),
+            ("Address", self.live.device_ip), ("WiFi", f"{info.rssi_dbm} dBm"),
+            ("Audio", f"{info.sample_rate_hz} Hz, {info.hop_size}-sample blocks"),
+            ("Last reset", f"reason {info.reset_reason}")])
         self.run_mode_var.set(info.run_mode)
+        self._update_seg()
         self.algo_combo.configure(values=[a.name for a in algs])
         if info.active_algorithm < len(algs):
             self.algo_combo.current(info.active_algorithm)
         self.pattern_spin.configure(to=max(0, info.num_patterns - 1))
         self.pattern_var.set(info.active_pattern)
         self.bri_var.set(min(info.brightness, 254))
+        self.bri_label.configure(text=f"{round(min(info.brightness, 254) / 2.54)}%")
         self.calib_filter.configure(values=["All stages"] + [f"Algorithm: {a.name}" for a in algs])
         if not self.calib_filter.get():
             self.calib_filter.current(0)
@@ -736,7 +958,7 @@ class App:
         self.worker.submit(fn, done, lambda e: self._error(what or P.enum_name(Cmd, cmd), e))
 
     def _error(self, what: str, e: Exception) -> None:
-        self.status_var.set(f"{what}: {e}")
+        self._set_status(f"{what}: {e}", "error" if not self.connected else "ok")
 
     def _log(self, line: str) -> None:
         self.log_list.insert("end", time.strftime("%H:%M:%S ") + line)
@@ -750,7 +972,7 @@ class App:
         self.call(Cmd.SET_RUN_CONFIG, P.build_set_run_config(**kw))
 
     def _set_rate(self) -> None:
-        self.cfg["live_hz"] = self.worker.live_hz = self.rate_var.get()
+        self.cfg["live_hz"] = self.worker.live_hz = int(self.rate_var.get().split()[0])
         self._toggle_live()
 
     def _toggle_live(self) -> None:
@@ -758,96 +980,186 @@ class App:
         self.call(Cmd.LIVE_SUBSCRIBE, P.build_live_subscribe(self.live.port, hz))
         self.live.reset()
 
+    # Live view geometry is computed on resize; per frame only colours and coordinates change.
+
     def _layout_live(self) -> None:
         cv = self.cv
         cv.delete("all")
-        w, h = max(cv.winfo_width(), 200), max(cv.winfo_height(), 200)
-        n = self.info.num_leds if self.info else 60
-        pad = 12
-        size = (w - 2 * pad) / max(n, 1)
-        y0 = pad
-        self.led_items = [cv.create_rectangle(pad + i * size + 1, y0, pad + (i + 1) * size - 1, y0 + max(size, 14),
-                                              fill="#000", outline="#333") for i in range(n)]
-        self.led_colors = ["#000"] * n
-        y = y0 + max(size, 14) + 16
-        cv.create_text(pad, y, text="level", fill="#888", anchor="w")
-        self.level_bar = cv.create_rectangle(pad + 50, y - 6, pad + 50, y + 6, fill="#4c4", width=0)
-        self.level_w = w - 2 * pad - 50
-        y += 24
-        cv.create_text(pad, y, text="centroid", fill="#888", anchor="w")
-        cv.create_line(pad + 50, y, pad + 50 + self.level_w, y, fill="#333")
-        self.centroid_mark = cv.create_line(pad + 50, y - 7, pad + 50, y + 7, fill="#fc3", width=3)
-        y += 24
-        self.bpm_text = cv.create_text(pad, y, text="BPM -", fill="#ddd", anchor="w", font=("Segoe UI", 12, "bold"))
-        self.beat_dot = cv.create_oval(pad + 110, y - 8, pad + 126, y + 8, fill="#222", width=0)
-        self.mode_text = cv.create_text(w - pad, y, text="", fill="#888", anchor="e")
-        y += 20
-        self.band_top, self.band_bottom = y, h - pad
-        self.band_area = (pad, w - pad)
-        nb = len(self.drawn_frame.bands) if self.drawn_frame else 12
+        w, h = max(cv.winfo_width(), 300), max(cv.winfo_height(), 260)
+        p = 28
+        avail = w - 2 * p
+        n = self.info.num_leds if (self.info and self.connected) else 60
+
+        # header: LED count + mode on the left, link stats + WiFi strength on the right
+        head = f"{n} LEDs" if self.connected and self.info else "Not connected"
+        t = cv.create_text(p, p, text=head, fill=C["text"] if self.connected else C["muted"], font=FONT_H, anchor="w")
+        self.mode_item = cv.create_text(cv.bbox(t)[2] + 12, p, text="", fill=C["warn"], font=FONT_SM, anchor="w")
+        x = w - p
+        if self.connected and self.info:
+            rssi = self.info.rssi_dbm
+            t = cv.create_text(x, p, text=f"{rssi} dBm", fill=C["muted"], font=FONT_SM, anchor="e")
+            x = cv.bbox(t)[0] - 8
+            lit = 4 if rssi >= -55 else 3 if rssi >= -67 else 2 if rssi >= -75 else 1 if rssi >= -85 else 0
+            col = C["ok"] if lit >= 3 else C["warn"] if lit == 2 else C["bad"]
+            for i in range(4):
+                bx = x - (3 - i) * 6
+                cv.create_line(bx, p + 6, bx, p + 6 - (4 + 3 * i), width=4, capstyle="round",
+                               fill=col if i < lit else C["line"])
+            x -= 3 * 6 + 18
+        self.stats_item = cv.create_text(x, p, text="", fill=C["faint"], font=FONT_SM, anchor="e")
+
+        # strip: round LEDs with a glow on a rail; wraps into rows on narrow windows
+        per_row = max(1, int(avail // 16))
+        rows = -(-n // per_row)
+        per_row = -(-n // rows)
+        s = min(avail / per_row, 34.0)
+        row_h = s * 1.25
+        x0 = p + (avail - per_row * s) / 2 + s / 2
+        y0 = p + 34 + s / 2
+        core, glow = s * 0.34, s * 0.48
+        self.led_items = []
+        for r in range(rows):
+            cnt = min(per_row, n - r * per_row)
+            y = y0 + r * row_h
+            cv.create_line(x0, y, x0 + (cnt - 1) * s, y, width=s * 0.96 + 4, capstyle="round", fill=C["bg"])
+            for i in range(cnt):
+                cx = x0 + i * s
+                g = cv.create_oval(cx - glow, y - glow, cx + glow, y + glow, fill=C["bg"], width=0)
+                c = cv.create_oval(cx - core, y - core, cx + core, y + core, fill=C["socket"], width=0)
+                self.led_items.append((g, c))
+        self.led_colors = [""] * n
+        y = y0 + (rows - 1) * row_h + s / 2 + 36
+
+        # readouts: BPM with a beat pulse | level and tone meters
+        cv.create_text(p, y, text="TEMPO  ·  BPM", fill=C["faint"], font=FONT_SM, anchor="w")
+        self.bpm_item = cv.create_text(p, y + 34, text="--", fill=C["text"], font=FONT_NUM, anchor="w")
+        self.beat_item = cv.create_oval(p + 112, y + 28, p + 124, y + 40, fill=C["socket"], width=0)
+        mx0 = p + 200 if avail >= 480 else p
+        my = y if avail >= 480 else y + 80
+        mx1 = w - p
+        cv.create_text(mx0, my, text="LEVEL", fill=C["faint"], font=FONT_SM, anchor="w")
+        cv.create_line(mx0 + 4, my + 22, mx1 - 4, my + 22, width=8, capstyle="round", fill=C["panel2"])
+        self.level_item = cv.create_line(mx0 + 4, my + 22, mx0 + 4, my + 22, width=8, capstyle="round",
+                                         fill=C["accent"], state="hidden")
+        cv.create_text(mx0, my + 46, text="TONE", fill=C["faint"], font=FONT_SM, anchor="w")
+        cv.create_text(mx1, my + 46, text="bright ›", fill=C["faint"], font=FONT_SM, anchor="e")
+        cv.create_line(mx0 + 4, my + 66, mx1 - 4, my + 66, width=2, fill=C["line"])
+        self.tone_item = cv.create_oval(mx0, my + 61, mx0 + 10, my + 71, fill=C["warn"], width=0, state="hidden")
+        self.meter_x = (mx0 + 4, mx1 - 4)
+        self.meter_y = (my + 22, my + 66)
+
+        # spectrum: gradient bars on tracks with peak-hold caps
+        top = max(y + 84, my + 92)
+        bottom = h - p
+        nb = len(self.drawn_frame.bands) if self.drawn_frame else AUDIO_BANDS_DEFAULT
         self.band_items = []
-        bw = (w - 2 * pad) / max(nb, 1)
-        for b in range(nb):
-            self.band_items.append(cv.create_rectangle(pad + b * bw + 2, h - pad, pad + (b + 1) * bw - 2, h - pad,
-                                                       fill="#38f", width=0))
+        self.band_geom = (top + 22, bottom)
+        self.band_bw = 0.0
+        if bottom - top > 60 and nb:
+            cv.create_text(p, top, text="SPECTRUM", fill=C["faint"], font=FONT_SM, anchor="w")
+            slot = avail / nb
+            bw = max(3.0, min(slot * 0.55, 26.0))
+            for b in range(nb):
+                bx = p + (b + 0.5) * slot
+                col = mix(mix(C["accent"], "#b06dff", min(1.0, 2 * b / max(nb - 1, 1))), "#ff6db0",
+                          max(0.0, 2 * b / max(nb - 1, 1) - 1))
+                cv.create_line(bx, top + 22 + bw / 2, bx, bottom - bw / 2, width=bw, capstyle="round",
+                               fill=C["panel2"])
+                bar = cv.create_line(bx, bottom - bw / 2, bx, bottom - bw / 2, width=bw, capstyle="round",
+                                     fill=col, state="hidden")
+                cap = cv.create_line(bx - bw / 2, bottom, bx + bw / 2, bottom, width=2, fill=mix(col, "#ffffff", 0.4),
+                                     state="hidden")
+                self.band_items.append((bar, cap))
+            self.band_bw = bw
+        self.band_disp = [0.0] * len(self.band_items)
+        self.band_peak = [0.0] * len(self.band_items)
         self.drawn_frame = None
 
     def _draw(self, f: P.LiveData) -> None:
         cv = self.cv
-        n = min(len(self.led_items), len(f.leds) // 3)
         leds = f.leds
-        for i in range(n):
-            c = "#%02x%02x%02x" % (leds[3 * i], leds[3 * i + 1], leds[3 * i + 2])
-            if c != self.led_colors[i]:
-                self.led_colors[i] = c
-                cv.itemconfigure(self.led_items[i], fill=c)
-        x0 = self.cv.coords(self.level_bar)
-        if x0:
-            cv.coords(self.level_bar, x0[0], x0[1], x0[0] + self.level_w * f.level / 32767, x0[3])
-            cx = x0[0] + self.level_w * f.centroid / 32767
-            c = cv.coords(self.centroid_mark)
-            cv.coords(self.centroid_mark, cx, c[1], cx, c[3])
-        cv.itemconfigure(self.bpm_text, text=f"BPM {f.bpm_x10 / 10:.1f}" if f.bpm_x10 else "BPM -")
+        for i in range(min(len(self.led_items), len(leds) // 3)):
+            r, g, b = leds[3 * i], leds[3 * i + 1], leds[3 * i + 2]
+            key = "%02x%02x%02x" % (r, g, b)
+            if key == self.led_colors[i]:
+                continue
+            self.led_colors[i] = key
+            glow_item, core_item = self.led_items[i]
+            if r | g | b:
+                # sqrt lift: dim LED values stay visible on screen (the strip's own output is unchanged)
+                c = "#%02x%02x%02x" % tuple(int(255 * (v / 255) ** 0.5) for v in (r, g, b))
+                cv.itemconfigure(core_item, fill=c)
+                cv.itemconfigure(glow_item, fill=mix(c, C["panel"], 0.62))
+            else:
+                cv.itemconfigure(core_item, fill=C["socket"])
+                cv.itemconfigure(glow_item, fill=C["bg"])
+
+        (mx0, mx1), (ly, ty) = self.meter_x, self.meter_y
+        lv = f.level / 32767
+        cv.coords(self.level_item, mx0, ly, mx0 + (mx1 - mx0) * lv, ly)
+        cv.itemconfigure(self.level_item, state="normal" if lv > 0.01 else "hidden",
+                         fill=mix(C["accent"], C["ok"], lv))
+        tx = mx0 + (mx1 - mx0) * f.centroid / 32767
+        cv.coords(self.tone_item, tx - 5, ty - 5, tx + 5, ty + 5)
+        cv.itemconfigure(self.tone_item, state="normal")
+
+        cv.itemconfigure(self.bpm_item, text=f"{f.bpm_x10 / 10:.0f}" if f.bpm_x10 else "--")
         now = time.perf_counter()
         if f.beat_count != self.last_beat:
             if self.last_beat >= 0:
-                self.beat_until = now + 0.08
+                self.beat_until = now
             self.last_beat = f.beat_count
-        cv.itemconfigure(self.beat_dot, fill="#f44" if now < self.beat_until else "#222")
-        cv.itemconfigure(self.mode_text, text=P.enum_name(DeviceMode, f.device_mode))
-        if len(f.bands) != len(self.band_items):
+        k = max(0.0, 1.0 - (now - self.beat_until) / 0.3)
+        cv.itemconfigure(self.beat_item, fill=mix(C["socket"], C["bad"], k))
+        cv.itemconfigure(self.mode_item, text={1: "CALIBRATION", 2: "FIRMWARE UPDATE"}.get(f.device_mode, ""))
+
+        if len(f.bands) != len(self.band_items) and self.band_items:
             self.drawn_frame = f
             self._layout_live()
             return
-        span = self.band_bottom - self.band_top
-        for item, v in zip(self.band_items, f.bands):
-            c = cv.coords(item)
-            cv.coords(item, c[0], self.band_bottom - span * v / 32767, c[2], self.band_bottom)
+        top, bottom = self.band_geom
+        span = bottom - top - self.band_bw
+        for i, ((bar, cap), v) in enumerate(zip(self.band_items, f.bands)):
+            v /= 32767
+            d = v if v > self.band_disp[i] else self.band_disp[i] * 0.82 + v * 0.18   # fast attack, soft release
+            self.band_disp[i] = d
+            pk = max(d, self.band_peak[i] - 0.006)
+            self.band_peak[i] = pk
+            x = cv.coords(bar)[0]
+            yb = bottom - self.band_bw / 2
+            cv.coords(bar, x, yb, x, yb - span * d)
+            cv.itemconfigure(bar, state="normal" if d > 0.01 else "hidden")
+            yp = yb - span * pk - self.band_bw / 2 - 4
+            cv.coords(cap, x - self.band_bw / 2, yp, x + self.band_bw / 2, yp)
+            cv.itemconfigure(cap, state="normal" if pk > 0.02 else "hidden")
         if f.device_mode != self.device_mode and f.device_mode in (0, 1, 2):
             self.device_mode = DeviceMode(f.device_mode)
             self._update_mode_ui()
 
     def _tick(self) -> None:
-        """UI loop: worker results, then the newest live frame (if any)."""
+        """UI loop: worker results, then the newest live frame (if any). Always re-armed."""
         try:
-            while True:
-                cb, args = self.results.get_nowait()
-                cb(*args)
-        except queue.Empty:
-            pass
-        latest = self.live.latest
-        if latest and latest[0] is not self.drawn_frame and self.led_items:
-            self.drawn_frame = latest[0]
-            self._draw(latest[0])
-        self.root.after(FRAME_MS, self._tick)
+            try:
+                while True:
+                    cb, args = self.results.get_nowait()
+                    cb(*args)
+            except queue.Empty:
+                pass
+            latest = self.live.latest
+            if latest and latest[0] is not self.drawn_frame and self.led_items:
+                self.drawn_frame = latest[0]
+                self._draw(latest[0])
+        finally:
+            self.root.after(FRAME_MS, self._tick)
 
     def _stats_tick(self) -> None:
         lv = self.live
+        text = ""
         if self.connected and lv.frames:
-            self.stats_var.set(f"live {lv.frames * 2} fps, jitter {lv.age_sum / lv.frames:.1f} ms, "
-                               f"lost {lv.dropped}")
-        else:
-            self.stats_var.set("")
+            text = f"{lv.frames * 2} fps  ·  {lv.age_sum / lv.frames:.1f} ms jitter  ·  {lv.dropped} lost"
+        elif self.connected and self.live_on.get():
+            text = "waiting for live data"
+        self.cv.itemconfigure(self.stats_item, text=text)
         lv.frames, lv.age_sum = 0, 0.0
         self.root.after(500, self._stats_tick)
 
@@ -855,10 +1167,12 @@ class App:
 
     def _update_mode_ui(self) -> None:
         cal = self.device_mode == DeviceMode.CALIBRATION
-        self.calib_btn.configure(text="Exit calibration mode" if cal else "Enter calibration mode")
+        self.calib_btn.configure(text="Exit calibration" if cal else "Enter calibration",
+                                 style="TButton" if cal else "Accent.TButton")
+        self.save_btn.state(["!disabled"] if cal else ["disabled"])
         for w in self.param_widgets:
             w.state(["!disabled"] if cal else ["disabled"])
-        self.dirty_var.set("unsaved changes" if self.calib_dirty else "")
+        self.dirty_var.set("● Unsaved changes" if self.calib_dirty else "")
 
     def _toggle_calib(self) -> None:
         enter = self.device_mode != DeviceMode.CALIBRATION
@@ -885,25 +1199,28 @@ class App:
         self.param_widgets = []
         for sid in self._visible_stages():
             st = self.schemas[sid]
-            box = ttk.LabelFrame(body, text=f"{st.name}  -  {st.description}", padding=6)
-            box.pack(fill="x", pady=4, padx=2)
+            outer = card(body, st.name, st.description)
+            outer.pack(fill="x", pady=(0, 12), padx=(0, 8))
+            ttk.Button(outer.head, text="Reset", command=lambda s=sid: self._calib_reset(s)).pack(side="right")
+            box = ttk.Frame(outer, style="Card.TFrame")
+            box.pack(fill="x")
             box.columnconfigure(1, weight=1)
             for p in st.params:
                 self._param_row(box, sid, p)
-            ttk.Button(box, text="Reset stage", command=lambda s=sid: self._calib_reset(s)).grid(
-                row=len(st.params), column=0, sticky="w", pady=(4, 0))
         self._update_mode_ui()
 
-    def _param_row(self, box: ttk.LabelFrame, sid: int, p: P.ParamSchema) -> None:
+    def _param_row(self, box: ttk.Frame, sid: int, p: P.ParamSchema) -> None:
         row = p.id
         unit = "" if p.type == ParamType.ENUM else p.unit
-        ttk.Label(box, text=p.name + (f" [{unit}]" if unit else "")).grid(row=row, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(box, text=p.name.replace("_", " ") + (f"  ({unit})" if unit else ""), style="Card.Muted.TLabel",
+                  width=26).grid(row=row, column=0, sticky="w", padx=(0, 12), pady=4)
         vals = self.values.get(sid, [])
         cur = vals[p.id] if p.id < len(vals) else p.default
         key = (sid, p.id)
         if p.type == ParamType.BOOL:
             var: tk.Variable = tk.BooleanVar(value=cur >= 0.5)
-            w = ttk.Checkbutton(box, variable=var, command=lambda: self._param_changed(key, float(var.get())))
+            w = ttk.Checkbutton(box, variable=var, style="Card.TCheckbutton",
+                                command=lambda: self._param_changed(key, float(var.get())))
             w.grid(row=row, column=1, sticky="w")
             self.param_widgets.append(w)
         elif p.type == ParamType.ENUM:
@@ -926,8 +1243,9 @@ class App:
                 x = round(x) if is_int else round(x, 6)
                 var.set(x)
                 self._param_changed(key, float(x))
-            sc = ttk.Scale(box, from_=p.min, to=p.max, variable=var, command=from_scale)
-            sc.grid(row=row, column=1, sticky="ew")
+            sc = ttk.Scale(box, from_=p.min, to=p.max, variable=var, command=from_scale,
+                           style="Card.Horizontal.TScale")
+            sc.grid(row=row, column=1, sticky="ew", pady=4)
             def from_spin(*_: Any) -> None:
                 try:
                     self._param_changed(key, float(var.get()))
@@ -936,7 +1254,7 @@ class App:
             sp = ttk.Spinbox(box, from_=p.min, to=p.max, increment=p.step or 1, textvariable=var, width=10,
                              command=from_spin)
             sp.bind("<Return>", from_spin)
-            sp.grid(row=row, column=2, padx=4)
+            sp.grid(row=row, column=2, padx=(12, 0), pady=4)
             self.param_widgets += [sc, sp]
         self.param_vars[key] = var
 
@@ -986,7 +1304,7 @@ class App:
         def done(_: bytes) -> None:
             self.calib_dirty = False
             self._update_mode_ui()
-            self.status_var.set("parameters saved to flash")
+            self._set_status("Parameters saved to flash", "ok")
         self.call(Cmd.SAVE_PARAMS, done=done, timeout=10.0)
 
     def _calib_reload(self) -> None:
@@ -1144,7 +1462,7 @@ class App:
         self.worker.submit(fn, done, lambda e: self.set_msg.set(f"failed: {e}"))
 
     def _reboot(self) -> None:
-        self.call(Cmd.REBOOT, done=lambda _: self.status_var.set("device rebooting..."))
+        self.call(Cmd.REBOOT, done=lambda _: self._set_status("Device rebooting…", "busy"))
 
     def _factory_reset(self) -> None:
         if messagebox.askyesno("Factory reset", "Restore default settings? This also erases the WiFi "
