@@ -82,9 +82,13 @@ static void periph_set(hw_periph_t periph, bool on)
         }
         break;
     case HW_PERIPH_GDMA:
-        /* GDMA may also be used by IDF crypto drivers: enable only, never reset/gate. */
+        /* GDMA comes out of boot held in reset (SYSTEM_DMA_RST defaults to 1): release
+         * it. Never pulse it once released (other channels may be running), never gate. */
         if (on) {
             SYSTEM.perip_clk_en1.reg_dma_clk_en = 1;
+            if (SYSTEM.perip_rst_en1.reg_dma_rst) {
+                SYSTEM.perip_rst_en1.reg_dma_rst = 0;
+            }
         }
         break;
     }
