@@ -10,7 +10,7 @@ The device joins your home WiFi in station mode, so the PC stays on its normal n
 and keeps internet access. There is no device access point to join.
 
 ```
-Host/
+software/
   ledapp.py           the desktop app
   ledhost/
     protocol.py       frame encode/decode, enums, all command payloads, region image formats
@@ -25,14 +25,14 @@ You need Python 3.9 or newer with tkinter. The python.org installer for Windows
 includes it. There is no virtual environment and nothing to install.
 
 ```sh
-Scripts/software/host_run.sh [-device 192.168.1.50] [-debug]     # or Scripts\software\host_run.bat, or python Host/ledapp.py
+Scripts/software/host_run.sh [-device 192.168.1.50] [-debug]     # or Scripts\software\host_run.bat, or python software/ledapp.py
 ```
 
 * **Device:** without `--device` the app reconnects to the last device. Otherwise
   **Scan** broadcasts `LEDSTRIP_DISCOVER` and connects to the first device that
   answers; you can also type the device IP.
 * **Host settings:** the last device, live rate and debug mode are saved in
-  `Host/ledapp_settings.json`, which is git-ignored.
+  `software/ledapp_settings.json`, which is git-ignored.
 * **Windows firewall:** on first start Windows may ask whether Python may use the
   network. Allow it for private networks, otherwise the UDP live stream and discovery
   replies are blocked.
@@ -115,10 +115,10 @@ Scan / Connect and the **Debug** toggle.
 ## Testing without hardware
 
 ```sh
-python Host/tools/sim_device.py               # debug build (--flags 15); TCP 127.0.0.1:4210, UDP 4211
-python Host/tools/sim_device.py --flags 0     # release build: debug-only commands -> ERR_UNKNOWN_CMD
-python Host/ledapp.py --device 127.0.0.1
-python Host/tools/proto_test.py               # starts its own simulator on 14210/14211; 29 checks
+python software/tools/sim_device.py               # debug build (--flags 15); TCP 127.0.0.1:4210, UDP 4211
+python software/tools/sim_device.py --flags 0     # release build: debug-only commands -> ERR_UNKNOWN_CMD
+python software/ledapp.py --device 127.0.0.1
+python software/tools/proto_test.py               # starts its own simulator on 14210/14211; 29 checks
 ```
 
 The simulator has:

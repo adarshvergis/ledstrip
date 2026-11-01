@@ -6,10 +6,10 @@ A full on-target unit test suite is not part of the initial version.
 the native PC compiler (`Scripts/firmware/run_firmware_unit_tests.sh`, needs `gcc` in PATH, e.g. MSYS2 ucrt64)
 from the pure-C modules:
 
-* `Interface/signal_processing`
-* `Interface/common/crc32.c`
-* `Interface/led_patterns/led_color.c`
-* all `App/audio_processing/stages` except the front-end, which needs the microphone driver
+* `firmware/Interface/signal_processing`
+* `firmware/Interface/common/crc32.c`
+* `firmware/Interface/led_patterns/led_color.c`
+* all `firmware/App/audio_processing/stages` except the front-end, which needs the microphone driver
 
 It feeds synthetic audio through the real stage code and checks:
 

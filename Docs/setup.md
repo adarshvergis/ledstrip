@@ -43,7 +43,7 @@ twin (CMD / PowerShell) with the same name and options. `-debug` is the default 
 
 Helper scripts live in `Scripts/firmware/sub/` and `Scripts/software/sub/` (PowerShell scripts that
 do the work, `make_settings_image.py`). Without `-COMx`, `flash`, `monitor` and `update_settings` use
-the only serial port that is connected, and stop with an error if there are none or several.
+the only serial port that is connected (Bluetooth COM ports are ignored), and stop with an error if there are none or several.
 
 ### Build output
 
@@ -120,17 +120,17 @@ The device is a WiFi station only (no soft-AP). It joins the home WiFi from the 
 
 ## 6. Host software
 
-Desktop app `Host/ledapp.py` (tkinter, Python standard library only).
+Desktop app `software/ledapp.py` (tkinter, Python standard library only).
 
 ```sh
-Scripts/software/host_run.sh                         # or: python Host/ledapp.py
+Scripts/software/host_run.sh                         # or: python software/ledapp.py
 Scripts/software/host_run.sh -device 192.168.1.50    # connect to a device on start
 Scripts/software/host_run.sh -debug                  # start in debug mode
 Scripts/software/build.sh                            # optional: byte-compile check of the host sources
 ```
 
 CMD: `Scripts\software\host_run.bat`. Host settings (last device, live rate, debug mode) persist in
-`Host/ledapp_settings.json` (git-ignored).
+`software/ledapp_settings.json` (git-ignored).
 
 On first run Windows may show a firewall prompt for Python: allow it on private networks,
 otherwise the UDP live stream and discovery replies are blocked.
@@ -155,8 +155,8 @@ Calibration view's JSON export/import uses the same format.
 ```sh
 Scripts/firmware/run_firmware_unit_tests.sh   # DSP + pipeline stage tests, native gcc (needs gcc on PATH)
 Scripts/software/run_software_unit_tests.sh   # protocol test; starts the simulator itself (ports 14210/14211)
-python Host/tools/sim_device.py               # simulated device on 127.0.0.1:4210 / :4211, no hardware
-python Host/tools/sim_device.py --flags 0     # simulate a release build (default --flags 15 = debug)
+python software/tools/sim_device.py               # simulated device on 127.0.0.1:4210 / :4211, no hardware
+python software/tools/sim_device.py --flags 0     # simulate a release build (default --flags 15 = debug)
 ```
 
 To try the UI without hardware: start `sim_device.py`, then `Scripts/software/host_run.sh -device 127.0.0.1`.

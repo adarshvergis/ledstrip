@@ -5,7 +5,7 @@
 | Level | How | Needs hardware |
 |---|---|---|
 | Host DSP / pipeline tests | `Scripts/firmware/run_firmware_unit_tests.sh` (native gcc, 43 checks; see `UnitTest/README.md`) | no |
-| Host protocol tests | `python Host/tools/proto_test.py` (starts the simulator itself on ports 14210/14211, debug then release build; 29 checks) | no (device simulator) |
+| Host protocol tests | `python software/tools/proto_test.py` (starts the simulator itself on ports 14210/14211, debug then release build; 29 checks) | no (device simulator) |
 | Firmware build check | `Scripts/firmware/build.sh -debug` and `-release` | no |
 | On-device manual tests | flash, then use the host app / debug CLI (checklist in section 3) | yes |
 | Automated test workflow (all of the above, plus issue reporting) | `/run-tests`, see section 5 | optional |
@@ -18,7 +18,7 @@ A hardware-in-the-loop setup used for AI-assisted debugging:
   serial log;
 * a camera pointed at the LED strip (laid out in a circle on the desk), to check visually
   what the strip shows;
-* the host desktop app (`Host/ledapp.py`) on the PC.
+* the host desktop app (`software/ledapp.py`) on the PC.
 
 **Status: not permanently connected.**
 
@@ -38,7 +38,7 @@ Notes from the first session (2026-11-01):
 
 Planned tooling:
 
-* **Scripted host checks** through `Host/ledhost/protocol.py` (as `Host/tools/proto_test.py`
+* **Scripted host checks** through `software/ledhost/protocol.py` (as `software/tools/proto_test.py`
   does against the simulator): select algorithms, change parameters, run CLI commands, upload
   firmware. The host app is a tkinter desktop app, so browser tools (Playwright) do not apply.
 * **Camera snapshots** (`ffmpeg -f dshow -i video="<camera>" -frames:v 1 shot.jpg`), plus a
@@ -136,7 +136,7 @@ with `/run-tests`. It is only started by the user (never automatically).
 
 | Date | Symptom | Root cause | Fix |
 |---|---|---|---|
-| 2026-11-01 | No LED output in any mode; `mic`: blocks 0, timeouts rising; error 3 mic_timeout | The GDMA controller is held in reset after boot (`SYSTEM_DMA_RST` defaults to 1); the driver only enabled its clock | `hw_periph_enable(HW_PERIPH_GDMA)` also releases the reset (`Interface/common/hw_common.c`) |
+| 2026-11-01 | No LED output in any mode; `mic`: blocks 0, timeouts rising; error 3 mic_timeout | The GDMA controller is held in reset after boot (`SYSTEM_DMA_RST` defaults to 1); the driver only enabled its clock | `hw_periph_enable(HW_PERIPH_GDMA)` also releases the reset (`firmware/Interface/common/hw_common.c`) |
 | 2026-11-01 (host test) | Beat locked to the off-beat at 95 BPM; double triggers | ODF from a single 4 ms block wobbles within one kick; no phase re-acquisition | 16 ms energy window, re-arm hysteresis, off-phase re-acquisition (`stage_beat.c`) |
 
 Known minor issue: one `audio_overrun` warning right after audio starts. The first block

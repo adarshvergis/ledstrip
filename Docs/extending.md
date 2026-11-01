@@ -56,7 +56,7 @@ Colour helpers are in `led_color.h`: `led_hsv`, `led_scale`, `led_add`, `led_gam
 
 ## 2. Add a new stage (worked example: VU meter render stage)
 
-### Step 1: id and parameter enum (`App/audio_processing/stage_params.h`)
+### Step 1: id and parameter enum (`firmware/App/audio_processing/stage_params.h`)
 
 ```c
 typedef enum {
@@ -78,7 +78,7 @@ typedef enum {
 `STAGE_COUNT` must stay <= 32 (dirty-mask width). Each stage may have at most
 `STAGE_MAX_PARAMS` (12, `build_config.h`) parameters.
 
-### Step 2: implementation (`App/audio_processing/stages/stage_render_vu.c`)
+### Step 2: implementation (`firmware/App/audio_processing/stages/stage_render_vu.c`)
 
 ```c
 #include "audio_types.h"
@@ -147,9 +147,9 @@ them. So `configure()` can trust the ranges.
 
 ### Step 3: register the stage
 
-* `App/audio_processing/audio_types.h`:
+* `firmware/App/audio_processing/audio_types.h`:
   `extern const stage_def_t g_stage_render_vu;`
-* `App/audio_processing/pipeline.c`, in `s_all_stages[]`:
+* `firmware/App/audio_processing/pipeline.c`, in `s_all_stages[]`:
   `[STAGE_RENDER_VU] = &g_stage_render_vu,`
 
 ### Step 4: use it in an algorithm (`algorithms.c`)
@@ -158,8 +158,8 @@ Either insert it into an existing list, or create a new algorithm (section 4).
 
 ### Step 5: build and tune
 
-* The new `.c` file is picked up by the glob in `App/CMakeLists.txt`. Because it is a new
-  file, re-run CMake (`Scripts/firmware/build.sh -clean`, or touch `App/CMakeLists.txt`), then build.
+* The new `.c` file is picked up by the glob in `firmware/App/CMakeLists.txt`. Because it is a new
+  file, re-run CMake (`Scripts/firmware/build.sh -clean`, or touch `firmware/App/CMakeLists.txt`), then build.
 * Add the file to `Scripts/firmware/run_firmware_unit_tests.sh` if it should be tested on the PC, and add a check in
   `UnitTest/host/test_host.c`.
 * In the host: Calibration tab -> enter calibration mode -> tune -> **Save to flash**.
@@ -200,7 +200,7 @@ static const stage_def_t *const s_algo_vu[] = {
 * A stored algorithm index that is out of range (e.g. after removing one) falls back to
   `DEFAULT_ALGORITHM`.
 
-## 5. Add a pre-stored LED pattern (`Interface/led_patterns/led_patterns.c`)
+## 5. Add a pre-stored LED pattern (`firmware/Interface/led_patterns/led_patterns.c`)
 
 * Add a palette (`static const led_rgb_t PAL_X[] = {...}`) if needed.
 * Append a row to `s_patterns[]`: `{"Name", PAT_TYPE, PAL(PAL_X), period_ms, width}`.
@@ -210,7 +210,7 @@ static const stage_def_t *const s_algo_vu[] = {
 
 The pattern count is reported to the host automatically.
 
-## 6. Add a debug CLI command (`App/software_communication/cli_commands.c`)
+## 6. Add a debug CLI command (`firmware/App/software_communication/cli_commands.c`)
 
 ```c
 static int c_hello(int argc, char **argv, cli_out_t *o)
@@ -231,7 +231,7 @@ static int c_hello(int argc, char **argv, cli_out_t *o)
   * `pipeline_capture_start`
 * All of this is compiled only with `ENABLE_DEBUG_CLI` (internal test builds).
 
-## 7. Add a device setting (`App/calibration/calibration.[ch]`)
+## 7. Add a device setting (`firmware/App/calibration/calibration.[ch]`)
 
 1. Append an id to `setting_id_t` (before `SET_ID_MAX`) and add a field to `settings_t`.
 2. Add a default in `settings_defaults()`, loading and range repair in `settings_load()`.
@@ -240,17 +240,17 @@ static int c_hello(int argc, char **argv, cli_out_t *o)
 4. Serialise it in `settings_serialize()`.
 5. If it should apply live, apply it in `apply_live()`.
 6. Document it in `Docs/protocol.md` (table at command 0x20).
-7. Host: add a `SettingDef` to `SETTINGS` in `Host/ledhost/protocol.py` (this also makes it
+7. Host: add a `SettingDef` to `SETTINGS` in `software/ledhost/protocol.py` (this also makes it
    usable in `Scripts/firmware/sub/make_settings_image.py` / `update_settings -file` JSON files), add its id to
-   the Debug > Settings field list in `Host/ledapp.py` if it should be editable there, and
-   add a default to `DEFAULT_SETTINGS` in `Host/tools/sim_device.py`.
+   the Debug > Settings field list in `software/ledapp.py` if it should be editable there, and
+   add a default to `DEFAULT_SETTINGS` in `software/tools/sim_device.py`.
 
 Settings commands exist only in debug builds (`ENABLE_DEBUG_HOST`). For release firmware a
 setting can only be written over USB with `Scripts/firmware/update_settings.sh`.
 
 ## 8. Add a protocol command
 
-1. `App/software_communication/protocol.h`: `#define CMD_X 0x08` (use a free id in the
+1. `firmware/App/software_communication/protocol.h`: `#define CMD_X 0x08` (use a free id in the
    right group).
 2. `comm.c`: add a `case CMD_X:` in `handle()`.
    * Parse the request with `r_u32` / `r_f32`; write the response with `w_u8/u16/u32/f32/str`.
@@ -259,11 +259,11 @@ setting can only be written over USB with `Scripts/firmware/update_settings.sh`.
      `ENABLE_SELF_DIAGNOSTICS`), so release builds answer them with `ERR_UNKNOWN_CMD`.
 3. `Docs/protocol.md`: describe the request and response payloads. Bump `PROTOCOL_VERSION`
    (`build_config.h`) for incompatible changes.
-4. Host: add the id and a request builder / parser in `Host/ledhost/protocol.py`, use it in
-   `Host/ledapp.py`, implement it in the simulator `Host/tools/sim_device.py` (and in its
-   debug-only set if applicable), and add a check to `Host/tools/proto_test.py`.
+4. Host: add the id and a request builder / parser in `software/ledhost/protocol.py`, use it in
+   `software/ledapp.py`, implement it in the simulator `software/tools/sim_device.py` (and in its
+   debug-only set if applicable), and add a check to `software/tools/proto_test.py`.
 
-## 9. Add an error code (`Interface/error_handler/error_handler.[ch]`)
+## 9. Add an error code (`firmware/Interface/error_handler/error_handler.[ch]`)
 
 * Append to `err_code_t` (before `ERR_COUNT`). The value is the LED blink count, so keep it
   stable.
@@ -274,7 +274,7 @@ setting can only be written over USB with `Scripts/firmware/update_settings.sh`.
   * FATAL: shown, then reboot after 8 s.
 * Add it to the table in `architecture.md`, section 7.
 
-## 10. Add diagnostics / benchmarks (`Interface/self_diagnostics`)
+## 10. Add diagnostics / benchmarks (`firmware/Interface/self_diagnostics`)
 
 ```c
 #ifdef ENABLE_SELF_DIAGNOSTICS
@@ -289,7 +289,7 @@ static diag_bench_t s_bench = DIAG_BENCH_INIT("group", "name");
   `mode_manager.c`.
 * The host Debug > Diagnostics tab shows all lines automatically.
 
-## 11. Change compile-time configuration (`App/build_config.h`)
+## 11. Change compile-time configuration (`firmware/App/build_config.h`)
 
 | Need | Change |
 |---|---|

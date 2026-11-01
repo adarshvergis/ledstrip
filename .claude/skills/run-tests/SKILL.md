@@ -23,7 +23,7 @@ Ask in a single `AskUserQuestion` call:
    If the scope includes firmware and a board is connected, also ask **which COM port** (free text via "Other"; default suggestion: the port in `Testing/testing.md`, currently COM11). Don't flash or open a port before the user answers.
 
 Consequences:
-* No hardware: skip every on-device case; mark them `SKIPPED (no hardware)` in the report. Host software tests still run against `Host/tools/sim_device.py` (via `proto_test.py`).
+* No hardware: skip every on-device case; mark them `SKIPPED (no hardware)` in the report. Host software tests still run against `software/tools/sim_device.py` (via `proto_test.py`).
 * Board only: no camera cases; verify LED behaviour only through CLI / serial / `GET_LIVE` / the UDP live stream.
 * Network: the device is WiFi station only (no soft-AP). It must already have home WiFi credentials (`Scripts/firmware/update_settings.sh`, or Debug > Settings with debug firmware). Never change the PC's network. If the device is not reachable, ask the user before rewriting its settings partition.
 
@@ -31,8 +31,8 @@ Consequences:
 
 Before running, check whether features changed since the test cases were last updated:
 1. Read `Testing/testing.md` sections 3-4 and note the `Last synced commit:` line at the top of section 3.
-2. `git log --oneline <last synced>..HEAD` and `git diff --stat <last synced>..HEAD` (read-only git is fine). If no marker, compare against the full CLI table in `App/software_communication/cli_commands.c`, the command list in `Docs/protocol.md`, algorithms in `App/audio_processing/algorithms.c`, patterns in `Interface/led_patterns`, settings keys, and the views of the host app `Host/ledapp.py`.
-3. For every new or changed CLI command, protocol command, algorithm, stage, parameter, setting, pattern, error code or host app view: add or update a row in the checklist (`Testing/testing.md` section 3), and add a native check to `UnitTest/host/test_host.c` (and the stage list in `Scripts/firmware/run_firmware_unit_tests.sh`) for any new pure-C stage or DSP function; add protocol checks to `Host/tools/proto_test.py` (and the simulator `Host/tools/sim_device.py` if needed) for new or changed commands.
+2. `git log --oneline <last synced>..HEAD` and `git diff --stat <last synced>..HEAD` (read-only git is fine). If no marker, compare against the full CLI table in `firmware/App/software_communication/cli_commands.c`, the command list in `Docs/protocol.md`, algorithms in `firmware/App/audio_processing/algorithms.c`, patterns in `firmware/Interface/led_patterns`, settings keys, and the views of the host app `software/ledapp.py`.
+3. For every new or changed CLI command, protocol command, algorithm, stage, parameter, setting, pattern, error code or host app view: add or update a row in the checklist (`Testing/testing.md` section 3), and add a native check to `UnitTest/host/test_host.c` (and the stage list in `Scripts/firmware/run_firmware_unit_tests.sh`) for any new pure-C stage or DSP function; add protocol checks to `software/tools/proto_test.py` (and the simulator `software/tools/sim_device.py` if needed) for new or changed commands.
 4. Update the `Last synced commit:` line to the current `git rev-parse --short HEAD`. Tell the user which cases were added or changed.
 
 ## 3. Unit tests (scope: firmware or all)
@@ -51,15 +51,15 @@ Before running, check whether features changed since the test cases were last up
 Only with the board connected and the COM port given.
 1. Flash: `Scripts/firmware/flash.sh -debug -COMx` (debug build; the checklist needs the CLI). Flash only after the user chose firmware / all and a port. Do not run `erase-flash` or `update_settings` without asking (they wipe calibration and/or the WiFi credentials).
 2. Capture the boot log over serial (pyserial, 115200, reset via RTS) and grep for `E (`, `panic`, `abort`, `Guru Meditation`, `error`. Any hit is an issue.
-3. Run the checklist rows in `Testing/testing.md` section 3 that apply to the workbench level. Drive the CLI over serial or through the protocol (`CLI_EXEC` 0x40 via `Host/ledhost/protocol.py`). With a camera: `ffmpeg -f dshow -i video="<camera>" -frames:v 1 shot.jpg` (ffmpeg at `C:\ffmpeg\bin`) and check LED colours / positions. Rows needing sound, a camera or a human observation that are not available: `SKIPPED (<reason>)`.
+3. Run the checklist rows in `Testing/testing.md` section 3 that apply to the workbench level. Drive the CLI over serial or through the protocol (`CLI_EXEC` 0x40 via `software/ledhost/protocol.py`). With a camera: `ffmpeg -f dshow -i video="<camera>" -frames:v 1 shot.jpg` (ffmpeg at `C:\ffmpeg\bin`) and check LED colours / positions. Rows needing sound, a camera or a human observation that are not available: `SKIPPED (<reason>)`.
 4. Rows marked "not yet tested" in the checklist should be run when possible, then the marker removed or kept with the result.
 5. Test destructive rows (calibration save, firmware update over WiFi, calib region upload) only after asking the user; restore the original values afterwards.
 
 ## 6. Host software tests (scope: host or all)
 
-1. Run `python Host/tools/proto_test.py`. It starts and stops the simulator itself (ports 14210/14211, debug then release build) and runs all checks (framing, live stream, calibration, settings, firmware upload, release refusals).
-2. With a board on the home network: write a short Python script in the scratchpad using `Host/ledhost/protocol.py` against the device IP (TCP 4210) and check info, `GET_LIVE`, `LIVE_SUBSCRIBE` (frame rate, seq gaps, unsubscribe), algorithm select, parameters, settings read (debug build), `CLI_EXEC`, and UDP discovery (4211). Do not write settings or start a firmware update without asking.
-3. The host app (`Host/ledapp.py`) is a tkinter desktop app; no browser automation applies. Only start it if the user asks, and close it afterwards.
+1. Run `python software/tools/proto_test.py`. It starts and stops the simulator itself (ports 14210/14211, debug then release build) and runs all checks (framing, live stream, calibration, settings, firmware upload, release refusals).
+2. With a board on the home network: write a short Python script in the scratchpad using `software/ledhost/protocol.py` against the device IP (TCP 4210) and check info, `GET_LIVE`, `LIVE_SUBSCRIBE` (frame rate, seq gaps, unsubscribe), algorithm select, parameters, settings read (debug build), `CLI_EXEC`, and UDP discovery (4211). Do not write settings or start a firmware update without asking.
+3. The host app (`software/ledapp.py`) is a tkinter desktop app; no browser automation applies. Only start it if the user asks, and close it afterwards.
 4. Stop any process you started. Never leave stray simulators or scripts running.
 
 ## 7. Security tests (only if the user asked)

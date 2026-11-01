@@ -56,32 +56,33 @@ about 4-5 ms.
 ## Repository layout
 
 ```
-App/                      application layer (ESP-IDF component "App")
-  main.c                  start-up sequence + supervisor loop (watchdog, health, OTA confirm)
-  build_config.h          ALL compile-time configuration: versions, build variants, pins,
-                          audio, algorithms, LEDs, network, tasks, watchdog, flash addresses
-  mode_manager/           device modes (main / calibration / fw-update), run modes, real-time task
-  data_acquisition/       DMA block hand-off, mic channel auto-detect, signal supervision
-  audio_processing/       pipeline framework (pipeline.c), algorithm table (algorithms.c),
-    stage_params.h        stage + parameter id registry (persistent keys)
-    stages/               one file per processing stage
-  light_control/          frame buffer, overlays, brightness, power limiter
-  calibration/            live parameter table, save/reload/reset, device + network settings
-  software_communication/ protocol dispatcher (comm.c), debug CLI commands
-Interface/                reusable submodules (ESP-IDF component "Interface")
-  common/                 GPIO matrix, clock gating, DMA descriptors, cycle counter, CRC-32
-  microphone/             INMP441 driver: I2S RX + GDMA ring (register level)
-  led_strip/              WS2812B driver: GPSPI2 + GDMA (register level)
-  signal_processing/      fixed-point DSP: biquad, FIR, DC blocker, envelope, FFT, log/exp,
-                          autocorrelation, interpolation, baseline removal
-  led_patterns/           pre-stored patterns, error/progress indication, colour helpers
-  config_manager/         A/B-slot key/value flash store (calib + settings regions)
-  network/                WiFi station, TCP frame server, UDP discovery
-  firmware_updater/       OTA application update + calibration region update
-  self_diagnostics/       heap/stack/CPU/flash reports, benchmarks (ENABLE_SELF_DIAGNOSTICS)
-  cli/                    command interpreter (ENABLE_DEBUG_CLI)
-  error_handler/          error registry, LED indication, TG0 hardware watchdog
-Host/                     host software: desktop app (ledapp.py, tkinter), protocol module, simulator
+firmware/                 ESP-IDF project: CMakeLists.txt, sdkconfig.defaults, partitions.csv
+  App/                    application layer (ESP-IDF component "App")
+    main.c                  start-up sequence + supervisor loop (watchdog, health, OTA confirm)
+    build_config.h          ALL compile-time configuration: versions, build variants, pins,
+                            audio, algorithms, LEDs, network, tasks, watchdog, flash addresses
+    mode_manager/           device modes (main / calibration / fw-update), run modes, real-time task
+    data_acquisition/       DMA block hand-off, mic channel auto-detect, signal supervision
+    audio_processing/       pipeline framework (pipeline.c), algorithm table (algorithms.c),
+      stage_params.h        stage + parameter id registry (persistent keys)
+      stages/               one file per processing stage
+    light_control/          frame buffer, overlays, brightness, power limiter
+    calibration/            live parameter table, save/reload/reset, device + network settings
+    software_communication/ protocol dispatcher (comm.c), debug CLI commands
+  Interface/              reusable submodules (ESP-IDF component "Interface")
+    common/                 GPIO matrix, clock gating, DMA descriptors, cycle counter, CRC-32
+    microphone/             INMP441 driver: I2S RX + GDMA ring (register level)
+    led_strip/              WS2812B driver: GPSPI2 + GDMA (register level)
+    signal_processing/      fixed-point DSP: biquad, FIR, DC blocker, envelope, FFT, log/exp,
+                            autocorrelation, interpolation, baseline removal
+    led_patterns/           pre-stored patterns, error/progress indication, colour helpers
+    config_manager/         A/B-slot key/value flash store (calib + settings regions)
+    network/                WiFi station, TCP frame server, UDP discovery
+    firmware_updater/       OTA application update + calibration region update
+    self_diagnostics/       heap/stack/CPU/flash reports, benchmarks (ENABLE_SELF_DIAGNOSTICS)
+    cli/                    command interpreter (ENABLE_DEBUG_CLI)
+    error_handler/          error registry, LED indication, TG0 hardware watchdog
+software/                 host software: desktop app (ledapp.py, tkinter), protocol module, simulator
 UnitTest/host/            PC-side DSP / pipeline tests (native gcc)
 Docs/                     architecture.md, protocol.md, extending.md
 Testing/                  testing.md: test levels, checklist, security cases, /run-tests workflow, bug log
@@ -89,7 +90,6 @@ Future/                   future_plans.md: change requests, independence from ES
 Scripts/firmware/         build, flash, monitor, WiFi credentials, firmware unit tests, image tools
 Scripts/software/         host build check, host run, host tests
 build/                    all build output (git-ignored): build/firmware, build/software
-CMakeLists.txt, sdkconfig.defaults, partitions.csv   ESP-IDF project files
 ```
 
 ## Firmware: build and flash
@@ -155,13 +155,13 @@ tuning, settings and updates.
 
 ## Host software
 
-A desktop app (`Host/ledapp.py`, tkinter) using only the Python standard library: Python
+A desktop app (`software/ledapp.py`, tkinter) using only the Python standard library: Python
 3.9+, no venv, no pip install.
 
 ```sh
-Scripts/software/host_run.sh                 # or host_run.bat, or python Host/ledapp.py
+Scripts/software/host_run.sh                 # or host_run.bat, or python software/ledapp.py
 Scripts/software/host_run.sh -device 192.168.1.50 [-debug]
-python Host/tools/sim_device.py     # device simulator for testing without hardware
+python software/tools/sim_device.py     # device simulator for testing without hardware
 ```
 
 | View | Content |
@@ -173,7 +173,7 @@ python Host/tools/sim_device.py     # device simulator for testing without hardw
 
 Data is fetched once per (re)connect; Refresh buttons reload it. On first run Windows may ask
 for firewall access for Python: allow private networks, or the UDP live stream and discovery
-replies are blocked. More detail: `Host/README.md`.
+replies are blocked. More detail: `software/README.md`.
 
 ## Debug CLI (internal test builds)
 
@@ -225,4 +225,4 @@ The manual on-device checklist and the bug log are in `Testing/testing.md`.
 * [Testing/testing.md](Testing/testing.md): testing levels, checklist, debug test setup, bug log.
 * [Future/future_plans.md](Future/future_plans.md): planned changes and features.
 * [Docs/setup.md](Docs/setup.md): toolchain, build, flash, WiFi provisioning, host app.
-* [Host/README.md](Host/README.md): host software details.
+* [software/README.md](software/README.md): host software details.

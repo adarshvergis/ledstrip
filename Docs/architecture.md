@@ -109,7 +109,7 @@ Short version below; the full guide with a worked example (and how to add parame
 algorithms, patterns, settings, CLI and protocol commands) is in `extending.md`.
 
 1. Append `STAGE_xxx` before `STAGE_COUNT` in `stage_params.h`, and add a `xxx_P_*` parameter enum.
-2. Implement `App/audio_processing/stages/stage_xxx.c`. Copy any existing stage as a template.
+2. Implement `firmware/App/audio_processing/stages/stage_xxx.c`. Copy any existing stage as a template.
 3. Declare it with `extern` in `audio_types.h`, and add it to `s_all_stages` in `pipeline.c`.
 4. Insert it into one or more algorithms in `algorithms.c`.
 5. Run `Scripts/firmware/build.sh`. The host UI builds the parameter editors from the schema automatically.
