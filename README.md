@@ -86,8 +86,9 @@ UnitTest/host/            PC-side DSP / pipeline tests (native gcc)
 Docs/                     architecture.md, protocol.md, extending.md
 Testing/                  testing.md: test levels, checklist, security cases, /run-tests workflow, bug log
 Future/                   future_plans.md: change requests, independence from ESP-IDF, features
-Scripts/                  build / flash / monitor, WiFi credential flashing, host run, tests,
-                          calib / settings image tools
+Scripts/firmware/         build, flash, monitor, WiFi credentials, firmware unit tests, image tools
+Scripts/software/         host build check, host run, host tests
+build/                    all build output (git-ignored): build/firmware, build/software
 CMakeLists.txt, sdkconfig.defaults, partitions.csv   ESP-IDF project files
 ```
 
@@ -98,36 +99,36 @@ Requirements: ESP-IDF **v5.3.x**, installed at `%USERPROFILE%\esp\v5.3.1\esp-idf
 refuses to run in Git-Bash/MSYS shells).
 
 ```sh
-Scripts/build.sh                    # debug build (INTERNAL_TEST_BUILD: CLI + diagnostics) -> build/
-Scripts/build.sh --release          # release build -> build_release/
-Scripts/build.sh flash COM11        # build + flash over the Xiao USB-C port
-Scripts/build.sh flash-monitor COM11
-Scripts/build.sh monitor COM11      # boot log / console (Ctrl+] to exit)
-Scripts/build.sh size | clean | fullclean | menuconfig
-Scripts/build_debug.sh [flash|flash-monitor] [COM11]     # shortcuts, same arguments
-Scripts/build_release.sh [flash|flash-monitor] [COM11]
+Scripts/firmware/build.sh -debug             # debug build (INTERNAL_TEST_BUILD: CLI + diagnostics)
+Scripts/firmware/build.sh -release           # release build
+Scripts/firmware/flash.sh -COM11 -release    # build (incremental) + flash over the Xiao USB-C port
+Scripts/firmware/flash.sh -COM11 -debug
+Scripts/firmware/monitor.sh -COM11           # boot log / console (Ctrl+] to exit)
+Scripts/firmware/build.sh -debug -size | -clean | -menuconfig
 ```
 
-CMD / PowerShell: `Scripts\build.bat flash -Port COM11`,
-`Scripts\build.ps1 flash -Port COM11 [-Release]`, or `Scripts\build_debug.bat` /
-`Scripts\build_release.bat`.
+CMD / PowerShell: the same names with `.bat`, e.g. `Scripts\firmware\flash.bat -COM11 -release`.
+`-debug` is the default if no variant is given. Without `-COMx` the only connected serial
+port is used. Scripts: `Scripts/firmware/` (`build`, `flash`, `monitor`, `update_settings`,
+`run_firmware_unit_tests`; helpers in `sub/`).
 
 | | Debug (default) | Release |
 |---|---|---|
 | Host features | everything: main view, calibration, firmware update, settings / WiFi, errors, CLI, diagnostics | main view, calibration, firmware update only; other commands answer "unknown command" |
 | Size | ~906 KB | ~884 KB |
 
-Outputs:
+Outputs, per variant (`debug` / `release`):
 
-* `build/led_strip_fw.bin` (release: `build_release/`): application image. Use this file for
-  over-the-air updates.
-* `build/bootloader/bootloader.bin` and `build/partition_table/partition-table.bin`: only
-  needed for USB flashing, which the scripts handle.
-* Every successful build / flash also copies `led_strip_fw.bin`, `bootloader.bin`,
-  `partition-table.bin` and `ota_data_initial.bin` to `dist/debug/` or `dist/release/`
-  (git-ignored).
+* `build/firmware/<variant>/artefacts/`:
+  * `led_strip_fw.bin`: application image. Use this file for over-the-air updates.
+  * `led_strip_fw.elf`, `led_strip_fw.map`: debugging.
+  * `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin`: only needed for USB
+    flashing, which `flash` handles.
+  * `led_strip_fw_full.bin` / `led_strip_fw_full.hex`: bootloader + partition table + otadata +
+    app merged, to be written at flash offset 0x0 (first-flash image for other tools).
+* `build/firmware/<variant>/build_files/`: CMake / Ninja files and the generated `sdkconfig`.
 
-**When you add new source files**, run `Scripts/build.sh fullclean` once. Sources are found
+**When you add new source files**, run `Scripts/firmware/build.sh -clean` once (add `-release` for the release tree). Sources are found
 by a glob that is evaluated at CMake configure time.
 
 ## First-time setup
@@ -136,8 +137,8 @@ by a glob that is evaluated at CMake configure time.
    (Beat). Without stored WiFi credentials, WiFi stays off and the device runs stand-alone.
 2. Store your home WiFi credentials (the device is a WiFi station only; it has no own AP):
    * any firmware, over USB:
-     `Scripts/flash_settings.sh COM11 --ssid HomeWiFi --password secret [--name ledstrip]`
-     (or `flash_settings.bat`, or a JSON file of setting names). This rewrites the whole
+     `Scripts/firmware/update_settings.sh -ssid HomeWiFi -password secret [-name ledstrip] [-COM11]`
+     (or `update_settings.bat`, or `-file settings.json` with setting names). This rewrites the whole
      `settings` partition (other settings revert to defaults); firmware and calibration are
      kept. Release firmware can only be provisioned this way.
    * debug firmware: host app, Debug toggle > Debug > Settings, then reboot. This needs a
@@ -158,8 +159,8 @@ A desktop app (`Host/ledapp.py`, tkinter) using only the Python standard library
 3.9+, no venv, no pip install.
 
 ```sh
-Scripts/host_run.sh                 # or host_run.bat, or python Host/ledapp.py
-Scripts/host_run.sh --device 192.168.1.50 [--debug]
+Scripts/software/host_run.sh                 # or host_run.bat, or python Host/ledapp.py
+Scripts/software/host_run.sh -device 192.168.1.50 [-debug]
 python Host/tools/sim_device.py     # device simulator for testing without hardware
 ```
 
@@ -201,14 +202,15 @@ replies are blocked. More detail: `Host/README.md`.
 | Wrong colours | Debug > Settings -> colour order (WS2812B = GRB) |
 | Strip dim at full white | power limiter: raise `max_current_ma` (only with an adequate supply) |
 | Device not found by Scan | PC and device on the same network? WiFi credentials stored? Python allowed through the Windows firewall (private networks)? |
-| WiFi settings wrong / unreachable | warning 10 `wifi_connect` (10 amber LEDs for 4 s, then in the error log); the device keeps retrying. Rewrite the credentials with `Scripts/flash_settings.sh` over USB |
+| WiFi settings wrong / unreachable | warning 10 `wifi_connect` (10 amber LEDs for 4 s, then in the error log); the device keeps retrying. Rewrite the credentials with `Scripts/firmware/update_settings.sh` over USB |
 | Live view frozen, fps 0 | UDP blocked by the firewall; allow Python on private networks |
 
 ## Tests
 
 ```sh
-Scripts/run_host_tests.sh           # DSP + stage tests with native gcc (43 checks)
-python Host/tools/proto_test.py     # protocol end-to-end against the simulator (starts it itself)
+Scripts/firmware/run_firmware_unit_tests.sh    # DSP + stage tests with native gcc (43 checks)
+Scripts/software/run_software_unit_tests.sh    # protocol end-to-end against the simulator (starts it itself)
+Scripts/software/build.sh                      # byte-compile check of the host sources
 ```
 
 The manual on-device checklist and the bug log are in `Testing/testing.md`.

@@ -159,8 +159,8 @@ Either insert it into an existing list, or create a new algorithm (section 4).
 ### Step 5: build and tune
 
 * The new `.c` file is picked up by the glob in `App/CMakeLists.txt`. Because it is a new
-  file, re-run CMake (`Scripts/build.sh fullclean`, or touch `App/CMakeLists.txt`), then build.
-* Add the file to `Scripts/run_host_tests.sh` if it should be tested on the PC, and add a check in
+  file, re-run CMake (`Scripts/firmware/build.sh -clean`, or touch `App/CMakeLists.txt`), then build.
+* Add the file to `Scripts/firmware/run_firmware_unit_tests.sh` if it should be tested on the PC, and add a check in
   `UnitTest/host/test_host.c`.
 * In the host: Calibration tab -> enter calibration mode -> tune -> **Save to flash**.
 
@@ -241,12 +241,12 @@ static int c_hello(int argc, char **argv, cli_out_t *o)
 5. If it should apply live, apply it in `apply_live()`.
 6. Document it in `Docs/protocol.md` (table at command 0x20).
 7. Host: add a `SettingDef` to `SETTINGS` in `Host/ledhost/protocol.py` (this also makes it
-   usable in `Scripts/make_settings_image.py` / `flash_settings` JSON files), add its id to
+   usable in `Scripts/firmware/sub/make_settings_image.py` / `update_settings -file` JSON files), add its id to
    the Debug > Settings field list in `Host/ledapp.py` if it should be editable there, and
    add a default to `DEFAULT_SETTINGS` in `Host/tools/sim_device.py`.
 
 Settings commands exist only in debug builds (`ENABLE_DEBUG_HOST`). For release firmware a
-setting can only be written over USB with `Scripts/flash_settings.sh`.
+setting can only be written over USB with `Scripts/firmware/update_settings.sh`.
 
 ## 8. Add a protocol command
 
@@ -297,4 +297,4 @@ static diag_bench_t s_bench = DIAG_BENCH_INIT("group", "name");
 | Finer spectrum | `AUDIO_FFT_SIZE` 512 + `AUDIO_FFT_LOG2` 9 (more CPU, slower time response) |
 | More bands | `AUDIO_NUM_BANDS` (render spectrum divides the strip by it; protocol sends the count) |
 | Other pins / LED count | `PIN_*`, `LED_MAX_COUNT` (<= ~450 with one DMA descriptor) |
-| Release build | `Scripts/build_release.sh` or `Scripts/build.sh --release` (no settings / errors from the host, no CLI, no diagnostics) |
+| Release build | `Scripts/firmware/build.sh -release` (no settings / errors from the host, no CLI, no diagnostics) |

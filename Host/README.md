@@ -25,7 +25,7 @@ You need Python 3.9 or newer with tkinter. The python.org installer for Windows
 includes it. There is no virtual environment and nothing to install.
 
 ```sh
-Scripts/host_run.sh [--device 192.168.1.50] [--debug]     # or Scripts\host_run.bat, or python Host/ledapp.py
+Scripts/software/host_run.sh [-device 192.168.1.50] [-debug]     # or Scripts\software\host_run.bat, or python Host/ledapp.py
 ```
 
 * **Device:** without `--device` the app reconnects to the last device. Otherwise
@@ -43,7 +43,7 @@ The device needs your WiFi credentials once:
 
 * **Release firmware:** write them over the USB-C cable. This replaces all stored
   settings; calibration and firmware are kept.
-  `Scripts/flash_settings.sh COM5 --ssid HomeWiFi --password secret`
+  `Scripts/firmware/update_settings.sh -ssid HomeWiFi -password secret -COM5`
 * **Debug firmware:** you can also set them in **Debug > Settings**, then reboot the
   device. The settings partition survives OTA updates, so you can flash a debug
   build, set the WiFi from the host, and then OTA the release image.
@@ -132,10 +132,10 @@ The simulator has:
 ## Image tools
 
 ```sh
-python Scripts/make_calib_image.py params.json -o calib.bin [--sequence 1]   # Calibration > Export works as input
-python Scripts/make_calib_image.py --decode calib.bin [-o params.json]
-python Scripts/make_settings_image.py --ssid HomeWiFi --password secret -o settings.bin   # used by flash_settings.sh
+python Scripts/firmware/make_calib_image.py params.json -o calib.bin [--sequence 1]   # Calibration > Export works as input
+python Scripts/firmware/make_calib_image.py --decode calib.bin [-o params.json]
+python Scripts/firmware/sub/make_settings_image.py --ssid HomeWiFi --password secret -o settings.bin   # used by update_settings
 ```
 
 Upload a calibration image in **Firmware**, choosing *Calibration region image*. The
-settings image is written over USB at `0x3D8000` by `Scripts/flash_settings.sh`.
+settings image is written over USB at `0x3D8000` by `Scripts/firmware/update_settings.sh`.

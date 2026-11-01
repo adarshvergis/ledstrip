@@ -215,7 +215,7 @@ req: empty. resp: sequence of TLV entries until end of payload:
 
 Ids 2 (wifi_mode) and 5-7 (soft-AP) were removed in v2; such records in an old settings store
 are ignored and setting them returns `ERR_BAD_ARG`. In release builds the settings can only be
-written over USB (`Scripts/flash_settings.sh`, image format in section 5, store_id 1).
+written over USB (`Scripts/firmware/update_settings.sh`, image format in section 5, store_id 1).
 
 ### 0x21 SET_SETTING *(debug: ENABLE_DEBUG_HOST)*
 req: `u8 id, u8 len, u8 data[len]` (same encoding as above). Persisted immediately.

@@ -4,9 +4,9 @@
 
 | Level | How | Needs hardware |
 |---|---|---|
-| Host DSP / pipeline tests | `Scripts/run_host_tests.sh` (native gcc, 43 checks; see `UnitTest/README.md`) | no |
+| Host DSP / pipeline tests | `Scripts/firmware/run_firmware_unit_tests.sh` (native gcc, 43 checks; see `UnitTest/README.md`) | no |
 | Host protocol tests | `python Host/tools/proto_test.py` (starts the simulator itself on ports 14210/14211, debug then release build; 29 checks) | no (device simulator) |
-| Firmware build check | `Scripts/build_debug.sh` and `Scripts/build_release.sh` | no |
+| Firmware build check | `Scripts/firmware/build.sh -debug` and `-release` | no |
 | On-device manual tests | flash, then use the host app / debug CLI (checklist in section 3) | yes |
 | Automated test workflow (all of the above, plus issue reporting) | `/run-tests`, see section 5 | optional |
 
@@ -30,7 +30,7 @@ Notes from the first session (2026-11-01):
 * **WiFi conflict (resolved):** joining the device soft-AP from the development PC
   disconnected the PC from the home WiFi. The firmware is now WiFi station only (no soft-AP,
   see `Future/future_plans.md`, item 1): write the home WiFi credentials once with
-  `Scripts/flash_settings.sh COMx --ssid ... --password ...` (or Debug > Settings in the host
+  `Scripts/firmware/update_settings.sh -ssid ... -password ... -COMx` (or Debug > Settings in the host
   app with debug firmware). The PC stays on the home network.
 * No camera / browser automation tool was available to the AI agent in that session; only
   the serial port, `curl` against the (since removed) host REST API, and `ffmpeg` (installed at
@@ -64,14 +64,14 @@ Last synced commit: `08e70b2` (updated by the `/run-tests` workflow)
 | 8 | Calibration: change a parameter | visible effect immediately |
 | 9 | Calibration: save, reboot, `params <stage>` | value persisted (**not yet tested**) |
 | 10 | Calibration: exit without save | value reverts |
-| 11 | Firmware update (Firmware view) with `build/led_strip_fw.bin` | progress bar on strip, reboot, new build date in `info` (**not yet tested**) |
+| 11 | Firmware update (Firmware view) with `build/firmware/<variant>/artefacts/led_strip_fw.bin` | progress bar on strip, reboot, new build date in `info` (**not yet tested**) |
 | 12 | Calib region: download image, change params, upload image | old values restored (**not yet tested**) |
 | 13 | CLI `raise_error 2` | first 2 LEDs blink red |
-| 14 | `Scripts/flash_settings.sh COMx --ssid ... --password ...` (or Debug > Settings + reboot) | device joins the home network, found by Scan; calibration unchanged |
+| 14 | `Scripts/firmware/update_settings.sh -ssid ... -password ... -COMx` (or Debug > Settings + reboot) | device joins the home network, found by Scan; calibration unchanged |
 | 15 | No SSID stored (fresh flash / erased `settings` partition, or debug host Factory reset + reboot) | WiFi off, audio / patterns still work (**not yet tested**) |
 | 16 | Switch the home AP off, then on | device reconnects by itself; `wifi_connect` warning once the back-off reaches 10 s (**not yet tested**) |
 | 17 | Live view at 30 / 60 / 100 Hz (Live > Controls) | live header shows about that fps, few lost frames, LEDs match the strip (**not yet tested**) |
-| 18 | Release build (`Scripts/build_release.sh flash COMx`) | Debug mode not offered in the host app; main view, calibration and firmware update work (**not yet tested**) |
+| 18 | Release build (`Scripts/firmware/flash.sh -release -COMx`) | Debug mode not offered in the host app; main view, calibration and firmware update work (**not yet tested**) |
 
 ## 4. Security test cases
 
@@ -108,7 +108,7 @@ with `/run-tests`. It is only started by the user (never automatically).
 |---|---|
 | 1 | Ask the questions above. Hardware is never assumed to be connected. |
 | 2 | Sync test cases: compare the code with the `Last synced commit` marker (section 3). New CLI commands, protocol commands, algorithms, stages, parameters, settings, patterns, error codes or host app views get new rows in this file and new native / `proto_test.py` checks. The marker is updated. |
-| 3 | Unit tests: `Scripts/run_host_tests.sh`. Each failure gets a root-cause analysis in `UnitTest/failures/<date>_<name>.md`. |
+| 3 | Unit tests: `Scripts/firmware/run_firmware_unit_tests.sh`. Each failure gets a root-cause analysis in `UnitTest/failures/<date>_<name>.md`. |
 | 4 | Build checks: debug and release builds. |
 | 5 | On-device tests (board connected): flash, boot log scan, checklist (section 3). Cases that need a camera, sound or a human are marked SKIPPED when the workbench lacks them. |
 | 6 | Host software tests: `proto_test.py` (simulator, debug + release); protocol checks against the board (live stream, settings, calibration) when connected. |

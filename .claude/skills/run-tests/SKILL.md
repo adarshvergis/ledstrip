@@ -25,31 +25,31 @@ Ask in a single `AskUserQuestion` call:
 Consequences:
 * No hardware: skip every on-device case; mark them `SKIPPED (no hardware)` in the report. Host software tests still run against `Host/tools/sim_device.py` (via `proto_test.py`).
 * Board only: no camera cases; verify LED behaviour only through CLI / serial / `GET_LIVE` / the UDP live stream.
-* Network: the device is WiFi station only (no soft-AP). It must already have home WiFi credentials (`Scripts/flash_settings.sh`, or Debug > Settings with debug firmware). Never change the PC's network. If the device is not reachable, ask the user before rewriting its settings partition.
+* Network: the device is WiFi station only (no soft-AP). It must already have home WiFi credentials (`Scripts/firmware/update_settings.sh`, or Debug > Settings with debug firmware). Never change the PC's network. If the device is not reachable, ask the user before rewriting its settings partition.
 
 ## 2. Sync test cases with the code
 
 Before running, check whether features changed since the test cases were last updated:
 1. Read `Testing/testing.md` sections 3-4 and note the `Last synced commit:` line at the top of section 3.
 2. `git log --oneline <last synced>..HEAD` and `git diff --stat <last synced>..HEAD` (read-only git is fine). If no marker, compare against the full CLI table in `App/software_communication/cli_commands.c`, the command list in `Docs/protocol.md`, algorithms in `App/audio_processing/algorithms.c`, patterns in `Interface/led_patterns`, settings keys, and the views of the host app `Host/ledapp.py`.
-3. For every new or changed CLI command, protocol command, algorithm, stage, parameter, setting, pattern, error code or host app view: add or update a row in the checklist (`Testing/testing.md` section 3), and add a native check to `UnitTest/host/test_host.c` (and the stage list in `Scripts/run_host_tests.sh`) for any new pure-C stage or DSP function; add protocol checks to `Host/tools/proto_test.py` (and the simulator `Host/tools/sim_device.py` if needed) for new or changed commands.
+3. For every new or changed CLI command, protocol command, algorithm, stage, parameter, setting, pattern, error code or host app view: add or update a row in the checklist (`Testing/testing.md` section 3), and add a native check to `UnitTest/host/test_host.c` (and the stage list in `Scripts/firmware/run_firmware_unit_tests.sh`) for any new pure-C stage or DSP function; add protocol checks to `Host/tools/proto_test.py` (and the simulator `Host/tools/sim_device.py` if needed) for new or changed commands.
 4. Update the `Last synced commit:` line to the current `git rev-parse --short HEAD`. Tell the user which cases were added or changed.
 
 ## 3. Unit tests (scope: firmware or all)
 
-1. `Scripts/run_host_tests.sh`. If it fails to compile or any check fails:
+1. `Scripts/firmware/run_firmware_unit_tests.sh`. If it fails to compile or any check fails:
    * Find the root cause: read the failing check in `test_host.c`, the code it exercises, and `git log` for recent changes to those files. Decide: code regression, test expectation outdated, or test environment (e.g. gcc missing).
    * Write `UnitTest/failures/<YYYY-MM-DD>_<short-name>.md` with: failing check name and verbatim output, expected vs actual, root cause analysis (file:line), suggested fix, whether it is a regression (and the commit that likely caused it). One file per distinct failure.
 2. If gcc is missing, report that as the failure cause instead of skipping silently.
 
 ## 4. Build checks (scope: firmware or all)
 
-`Scripts/build_debug.sh` and `Scripts/build_release.sh` (can take minutes; run with a long timeout). A build error or new warning is an issue (step 8). Record binary sizes (last known: debug ~906 KB, release ~884 KB); images are also copied to `dist/debug/` and `dist/release/`.
+`Scripts/firmware/build.sh -debug` and `-release` (can take minutes; run with a long timeout). A build error or new warning is an issue (step 8). Record binary sizes (last known: debug ~906 KB, release ~884 KB); artefacts are in `build/firmware/<variant>/artefacts/`.
 
 ## 5. Firmware tests on device (scope: firmware or all; needs board)
 
 Only with the board connected and the COM port given.
-1. Flash: `Scripts/build_debug.sh flash <COMx>` (debug build; the checklist needs the CLI). Flash only after the user chose firmware / all and a port. Do not run `erase-flash` or `flash_settings` without asking (they wipe calibration and/or the WiFi credentials).
+1. Flash: `Scripts/firmware/flash.sh -debug -COMx` (debug build; the checklist needs the CLI). Flash only after the user chose firmware / all and a port. Do not run `erase-flash` or `update_settings` without asking (they wipe calibration and/or the WiFi credentials).
 2. Capture the boot log over serial (pyserial, 115200, reset via RTS) and grep for `E (`, `panic`, `abort`, `Guru Meditation`, `error`. Any hit is an issue.
 3. Run the checklist rows in `Testing/testing.md` section 3 that apply to the workbench level. Drive the CLI over serial or through the protocol (`CLI_EXEC` 0x40 via `Host/ledhost/protocol.py`). With a camera: `ffmpeg -f dshow -i video="<camera>" -frames:v 1 shot.jpg` (ffmpeg at `C:\ffmpeg\bin`) and check LED colours / positions. Rows needing sound, a camera or a human observation that are not available: `SKIPPED (<reason>)`.
 4. Rows marked "not yet tested" in the checklist should be run when possible, then the marker removed or kept with the result.

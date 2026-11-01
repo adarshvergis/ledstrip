@@ -112,7 +112,7 @@ algorithms, patterns, settings, CLI and protocol commands) is in `extending.md`.
 2. Implement `App/audio_processing/stages/stage_xxx.c`. Copy any existing stage as a template.
 3. Declare it with `extern` in `audio_types.h`, and add it to `s_all_stages` in `pipeline.c`.
 4. Insert it into one or more algorithms in `algorithms.c`.
-5. Run `Scripts/build.sh`. The host UI builds the parameter editors from the schema automatically.
+5. Run `Scripts/firmware/build.sh`. The host UI builds the parameter editors from the schema automatically.
 
 ## 5. Device modes and run modes
 
@@ -141,8 +141,8 @@ algorithms, patterns, settings, CLI and protocol commands) is in `extending.md`.
 * A commit always writes the *other* slot with sequence + 1, so a power loss during a save
   keeps the previous data.
 * The calibration region can be read (`GET_CALIB_IMAGE`) and written as a whole
-  (`FW_BEGIN target=1`). Use `Scripts/make_calib_image.py` to build an image from JSON.
-* The settings region is written over USB by `Scripts/flash_settings.sh`
+  (`FW_BEGIN target=1`). Use `Scripts/firmware/make_calib_image.py` to build an image from JSON.
+* The settings region is written over USB by `Scripts/firmware/update_settings.sh`
   (`make_settings_image.py` + esptool). Neither app flashing nor OTA touches `calib` or
   `settings`.
 

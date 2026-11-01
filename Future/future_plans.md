@@ -12,7 +12,7 @@ with `sta_ssid` / `sta_password` from the `settings` partition and reconnects fo
 (back-off 1 s -> 10 s). Without an SSID, WiFi stays off and the device runs stand-alone. The
 host finds it with UDP discovery / beacons, and the PC keeps its internet.
 
-* Credentials are written once over USB with `Scripts/flash_settings.sh` (release and debug
+* Credentials are written once over USB with `Scripts/firmware/update_settings.sh` (release and debug
   firmware), or from the host app's Debug > Settings tab (debug firmware only). OTA does not
   touch the settings partition.
 * Alternatives considered: BLE (rejected: stack size, 15-30 ms connection interval, slow
