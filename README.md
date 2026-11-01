@@ -24,17 +24,20 @@ about 4-5 ms.
 
 * **10 pre-stored patterns** (rainbow, ocean, fire, comet, ...). The microphone is off in
   pattern mode.
-* **Calibration mode**: tune any parameter live from the browser, then save to flash. The
+* **Calibration mode**: tune any parameter live from the host app, then save to flash. The
   calibration region can be exported/imported as a binary image.
 * **Firmware update over WiFi**: two OTA slots, automatic rollback if a new image fails to
   start.
+* **WiFi station only**: the device joins your home WiFi, so the PC keeps its internet. Live
+  data is streamed to the host over UDP (up to 100 Hz).
 * **Robustness**
   * Watchdog with per-task check-ins.
   * Error codes shown as blink patterns on the strip.
   * LED current limiter (USB safe by default).
   * A/B flash storage that survives power loss during a save.
 * **Debug tools** (internal test builds): text CLI over the network, self diagnostics
-  (heap, stacks, CPU load, per-stage timing, latency).
+  (heap, stacks, CPU load, per-stage timing, latency), error log, device / WiFi settings from
+  the host. Release builds compile all of these out.
 
 ## Hardware
 
@@ -73,17 +76,19 @@ Interface/                reusable submodules (ESP-IDF component "Interface")
                           autocorrelation, interpolation, baseline removal
   led_patterns/           pre-stored patterns, error/progress indication, colour helpers
   config_manager/         A/B-slot key/value flash store (calib + settings regions)
-  network/                WiFi station/soft-AP, TCP frame server, UDP discovery
+  network/                WiFi station, TCP frame server, UDP discovery
   firmware_updater/       OTA application update + calibration region update
   self_diagnostics/       heap/stack/CPU/flash reports, benchmarks (ENABLE_SELF_DIAGNOSTICS)
   cli/                    command interpreter (ENABLE_DEBUG_CLI)
   error_handler/          error registry, LED indication, TG0 hardware watchdog
-Host/                     host software: Python backend + browser UI, device simulator
+Host/                     host software: desktop app (ledapp.py, tkinter), protocol module, simulator
 UnitTest/host/            PC-side DSP / pipeline tests (native gcc)
 Docs/                     architecture.md, protocol.md, extending.md
-Testing/                  testing.md: test levels, manual checklist, debug test setup, bug log
+Testing/                  testing.md: test levels, checklist, security cases, /run-tests workflow, bug log
 Future/                   future_plans.md: change requests, independence from ESP-IDF, features
-Scripts/                  build / flash / monitor, host setup / run, tests, calib image tool
+Scripts/firmware/         build, flash, monitor, WiFi credentials, firmware unit tests, image tools
+Scripts/software/         host build check, host run, host tests
+build/                    all build output (git-ignored): build/firmware, build/software
 CMakeLists.txt, sdkconfig.defaults, partitions.csv   ESP-IDF project files
 ```
 
@@ -94,65 +99,81 @@ Requirements: ESP-IDF **v5.3.x**, installed at `%USERPROFILE%\esp\v5.3.1\esp-idf
 refuses to run in Git-Bash/MSYS shells).
 
 ```sh
-Scripts/build.sh                    # debug build (INTERNAL_TEST_BUILD: CLI + diagnostics) -> build/
-Scripts/build.sh --release          # release build -> build_release/
-Scripts/build.sh flash COM11        # build + flash over the Xiao USB-C port
-Scripts/build.sh flash-monitor COM11
-Scripts/build.sh monitor COM11      # boot log / console (Ctrl+] to exit)
-Scripts/build.sh size | clean | fullclean | menuconfig
+Scripts/firmware/build.sh -debug             # debug build (INTERNAL_TEST_BUILD: CLI + diagnostics)
+Scripts/firmware/build.sh -release           # release build
+Scripts/firmware/flash.sh -COM11 -release    # build (incremental) + flash over the Xiao USB-C port
+Scripts/firmware/flash.sh -COM11 -debug
+Scripts/firmware/monitor.sh -COM11           # boot log / console (Ctrl+] to exit)
+Scripts/firmware/build.sh -debug -size | -clean | -menuconfig
 ```
 
-CMD / PowerShell: `Scripts\build.bat flash -Port COM11` or
-`Scripts\build.ps1 flash -Port COM11 [-Release]`.
+CMD / PowerShell: the same names with `.bat`, e.g. `Scripts\firmware\flash.bat -COM11 -release`.
+`-debug` is the default if no variant is given. Without `-COMx` the only connected serial
+port is used. Scripts: `Scripts/firmware/` (`build`, `flash`, `monitor`, `update_settings`,
+`run_firmware_unit_tests`; helpers in `sub/`).
 
-Outputs:
+| | Debug (default) | Release |
+|---|---|---|
+| Host features | everything: main view, calibration, firmware update, settings / WiFi, errors, CLI, diagnostics | main view, calibration, firmware update only; other commands answer "unknown command" |
+| Size | ~906 KB | ~884 KB |
 
-* `build/led_strip_fw.bin`: application image. Use this file for over-the-air updates.
-* `build/bootloader/bootloader.bin` and `build/partition_table/partition-table.bin`: only
-  needed for USB flashing, which the scripts handle.
+Outputs, per variant (`debug` / `release`):
 
-**When you add new source files**, run `Scripts/build.sh fullclean` once. Sources are found
+* `build/firmware/<variant>/artefacts/`:
+  * `led_strip_fw.bin`: application image. Use this file for over-the-air updates.
+  * `led_strip_fw.elf`, `led_strip_fw.map`: debugging.
+  * `bootloader.bin`, `partition-table.bin`, `ota_data_initial.bin`: only needed for USB
+    flashing, which `flash` handles.
+  * `led_strip_fw_full.bin` / `led_strip_fw_full.hex`: bootloader + partition table + otadata +
+    app merged, to be written at flash offset 0x0 (first-flash image for other tools).
+* `build/firmware/<variant>/build_files/`: CMake / Ninja files and the generated `sdkconfig`.
+
+**When you add new source files**, run `Scripts/firmware/build.sh -clean` once (add `-release` for the release tree). Sources are found
 by a glob that is evaluated at CMake configure time.
 
 ## First-time setup
 
 1. Flash over USB. On boot you see a short blue wipe on the strip, then the default algorithm
-   (Beat).
-2. The device opens the soft-AP **`LEDSTRIP-XXXX`** (password `ledstrip123`, device IP
-   `192.168.4.1`).
-3. Start the host software (next section) and connect.
-4. **Recommended:** in the Settings tab, set the WiFi mode to *auto*, enter your home WiFi
-   SSID and password, and reboot.
-   * The device then joins your home network, and the PC no longer has to join the device AP.
-   * Joining the device AP disconnects a single-adapter PC from the internet; see
-     `Future/future_plans.md` item 1.
-   * In *auto* mode the device falls back to its soft-AP if the home network is unreachable
-     for 15 s.
-5. Find the device with **Scan** on the Main tab: UDP discovery, plus beacons the device
-   sends every 3 s.
+   (Beat). Without stored WiFi credentials, WiFi stays off and the device runs stand-alone.
+2. Store your home WiFi credentials (the device is a WiFi station only; it has no own AP):
+   * any firmware, over USB:
+     `Scripts/firmware/update_settings.sh -ssid HomeWiFi -password secret [-name ledstrip] [-COM11]`
+     (or `update_settings.bat`, or `-file settings.json` with setting names). This rewrites the whole
+     `settings` partition (other settings revert to defaults); firmware and calibration are
+     kept. Release firmware can only be provisioned this way.
+   * debug firmware: host app, Debug toggle > Debug > Settings, then reboot. This needs a
+     connection, so it works only after the device is already on a network.
+   * OTA never touches the settings partition, so you can also flash debug, set WiFi from the
+     host, then OTA the release image.
+3. The device joins the home network and reconnects forever (back-off 1 s -> 10 s; warning
+   `wifi_connect` once the back-off reaches 10 s).
+4. Start the host software (next section) and find the device with **Scan**: UDP discovery,
+   plus beacons the device sends every 3 s while connected.
 
 The device runs stand-alone with the last saved settings. The host is only needed for
 tuning, settings and updates.
 
 ## Host software
 
+A desktop app (`Host/ledapp.py`, tkinter) using only the Python standard library: Python
+3.9+, no venv, no pip install.
+
 ```sh
-Scripts/host_setup.sh               # once: creates Host/.venv and installs aiohttp
-Scripts/host_run.sh                 # then open http://127.0.0.1:8080
-Scripts/host_run.sh --device 192.168.4.1
+Scripts/software/host_run.sh                 # or host_run.bat, or python Host/ledapp.py
+Scripts/software/host_run.sh -device 192.168.1.50 [-debug]
 python Host/tools/sim_device.py     # device simulator for testing without hardware
 ```
 
-| Tab | Content |
+| View | Content |
 |---|---|
-| Main | discovery / connect, device info, run mode (audio / pattern), algorithm, pattern, brightness, live view (LED colours, level, BPM, beat, bands), active errors |
+| Live | LED strip (glowing dots, wraps on narrow windows), LED count, WiFi strength, live fps / jitter / lost frames, tempo with beat pulse, level, tone, spectrum with peak hold; controls: run mode (audio / pattern), algorithm, pattern, brightness, live view on/off and rate 30/60/100 Hz |
 | Calibration | enter/exit calibration mode; per-stage parameter editors generated from the device schema, applied live; save to flash, reload, reset stage / all; JSON export/import |
-| Settings | device name, WiFi mode, station + AP credentials, AP channel, LED count, colour order, current limit; host settings; factory reset; settings export/import |
-| Admin -> CLI | text console (internal test builds only) |
-| Admin -> Firmware Update | upload an app image (`led_strip_fw.bin`) or a calibration region image; download the current calibration image |
-| Admin -> Self Diagnostics | heap, stacks, CPU load per task, per-stage timing, latency, LED power (internal test builds only) |
+| Firmware | device details (name, firmware version, build, address, WiFi); upload an app image (`led_strip_fw.bin`, reboots after) or a calibration region image; download the current calibration image |
+| Debug (debug firmware only, Debug toggle in the top bar) | Settings (device name, WiFi SSID / password, current limit, LED count, colour order; reboot, factory reset), Errors, Diagnostics, CLI, request Log |
 
-More detail: `Host/README.md`.
+Data is fetched once per (re)connect; Refresh buttons reload it. On first run Windows may ask
+for firewall access for Python: allow private networks, or the UDP live stream and discovery
+replies are blocked. More detail: `Host/README.md`.
 
 ## Debug CLI (internal test builds)
 
@@ -178,16 +199,18 @@ More detail: `Host/README.md`.
 |---|---|
 | First N LEDs blink red / amber | error code N; see the table in `Docs/architecture.md` section 7, or CLI `errors` |
 | No reaction to sound | CLI `mic`: `signal ok`? `blocks` increasing? Raise the Front-end `input_gain` or lower the AGC `noise_gate` in Calibration |
-| Wrong colours | Settings -> colour order (WS2812B = GRB) |
+| Wrong colours | Debug > Settings -> colour order (WS2812B = GRB) |
 | Strip dim at full white | power limiter: raise `max_current_ma` (only with an adequate supply) |
-| Device not found by Scan | PC and device on the same network? In soft-AP mode connect the PC to `LEDSTRIP-XXXX` |
-| WiFi settings wrong / unreachable | in *auto* mode the device falls back to the soft-AP after 15 s |
+| Device not found by Scan | PC and device on the same network? WiFi credentials stored? Python allowed through the Windows firewall (private networks)? |
+| WiFi settings wrong / unreachable | warning 10 `wifi_connect` (10 amber LEDs for 4 s, then in the error log); the device keeps retrying. Rewrite the credentials with `Scripts/firmware/update_settings.sh` over USB |
+| Live view frozen, fps 0 | UDP blocked by the firewall; allow Python on private networks |
 
 ## Tests
 
 ```sh
-Scripts/run_host_tests.sh           # DSP + stage tests with native gcc (43 checks)
-python Host/tools/api_test.py       # host REST API against the simulator
+Scripts/firmware/run_firmware_unit_tests.sh    # DSP + stage tests with native gcc (43 checks)
+Scripts/software/run_software_unit_tests.sh    # protocol end-to-end against the simulator (starts it itself)
+Scripts/software/build.sh                      # byte-compile check of the host sources
 ```
 
 The manual on-device checklist and the bug log are in `Testing/testing.md`.
@@ -201,4 +224,5 @@ The manual on-device checklist and the bug log are in `Testing/testing.md`.
 * [Docs/protocol.md](Docs/protocol.md): host <-> device protocol and region image format.
 * [Testing/testing.md](Testing/testing.md): testing levels, checklist, debug test setup, bug log.
 * [Future/future_plans.md](Future/future_plans.md): planned changes and features.
-* [Host/README.md](Host/README.md): host software details and REST API.
+* [Docs/setup.md](Docs/setup.md): toolchain, build, flash, WiFi provisioning, host app.
+* [Host/README.md](Host/README.md): host software details.

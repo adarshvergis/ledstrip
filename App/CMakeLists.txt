@@ -1,6 +1,6 @@
 # "App" component: application layer (mode management, data acquisition, audio
 # processing pipeline, light control, calibration, host communication, main).
-file(GLOB_RECURSE APP_SRCS "${CMAKE_CURRENT_LIST_DIR}/*.c")
+file(GLOB_RECURSE APP_SRCS "main.c" "${CMAKE_CURRENT_LIST_DIR}/*.c")
 
 idf_component_register(
     SRCS ${APP_SRCS}

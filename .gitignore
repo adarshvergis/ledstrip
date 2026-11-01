@@ -1,14 +1,10 @@
 build/
-build_release/
-build_host_tests/
 CLAUDE.md
 project_details.md
-sdkconfig
-sdkconfig.old
 managed_components/
 dependencies.lock
+Host/ledapp_settings.json
 Host/.venv/
-Host/host_settings.json
 __pycache__/
 *.pyc
 .vscode/

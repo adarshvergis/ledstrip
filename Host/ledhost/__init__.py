@@ -1,3 +1,3 @@
-"""Host software for the music-reactive LED strip (protocol client + web UI server)."""
+"""Host <-> device protocol for the music-reactive LED strip (used by ledapp.py and the tools)."""
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"

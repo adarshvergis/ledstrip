@@ -5,13 +5,19 @@
 #ifndef PROTOCOL_H
 #define PROTOCOL_H
 
-/* Commands */
+/* Commands. 0x20-0x22, 0x40, 0x50/0x51 and 0x60/0x61 exist only in debug builds
+ * (ENABLE_DEBUG_HOST / ENABLE_DEBUG_CLI / ENABLE_SELF_DIAGNOSTICS); a release build
+ * answers them with ST_ERR_UNKNOWN_CMD. */
 #define CMD_PING                0x01
 #define CMD_GET_INFO            0x02
 #define CMD_REBOOT              0x03
 #define CMD_SET_DEVICE_MODE     0x04
 #define CMD_SET_RUN_CONFIG      0x05
 #define CMD_GET_LIVE            0x06
+#define CMD_LIVE_SUBSCRIBE      0x07
+
+/* Command id of the UDP live stream datagrams (same payload as the GET_LIVE response) */
+#define CMD_LIVE_FRAME          (CMD_GET_LIVE | 0x80)
 
 #define CMD_GET_ALGORITHMS      0x10
 #define CMD_GET_STAGE_LIST      0x11

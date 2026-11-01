@@ -8,7 +8,8 @@ Seeed Studio Xiao ESP32-C3 (RISC-V RV32IMC, 160 MHz, **no FPU**), WS2812B x60, I
 |---|---|---|
 | Base | ESP-IDF v5.3 **only** for build system, FreeRTOS, WiFi/TCP-IP, 2nd-stage bootloader, OTA and flash access | The C3 radio needs Espressif's closed WiFi blobs, which need FreeRTOS + lwIP. Everything else is our own register-level C. |
 | Own code | I2S mic driver, WS2812 driver, GDMA handling, watchdog, DSP library, pipeline, config store, protocol, CLI, diagnostics | No vendor driver layers (`driver/`, `esp_driver_*`) are used. Register maps come from the `soc/*_struct.h` headers. |
-| Host link | WiFi (station, falling back to soft-AP), binary TCP protocol, UDP discovery | WiFi has much higher bandwidth than BLE for firmware upload, and works with any browser-based host. |
+| Host link | WiFi **station only** (home network), binary TCP protocol, UDP live stream, UDP discovery | The PC stays on its own network and keeps internet (no device AP to join). BLE was rejected: stack size, 15-30 ms connection interval, slow OTA. mDNS is not needed (UDP discovery). Credentials come from the `settings` partition (written over USB with `flash_settings`, or from the host in debug builds). |
+| Build variants | debug (`INTERNAL_TEST_BUILD` -> `ENABLE_DEBUG_HOST`, `ENABLE_DEBUG_CLI`, `ENABLE_SELF_DIAGNOSTICS`) / release | Release compiles out settings (0x20-0x22), errors (0x60/0x61), CLI (0x40) and diagnostics (0x50/0x51) and answers them with `ERR_UNKNOWN_CMD`. It serves only the main view, calibration and firmware update. |
 | RTOS | FreeRTOS (required by WiFi anyway) | The real-time task runs at priority 24, above WiFi (23). It blocks on the DMA interrupt, so it uses CPU only while it has a block to process. |
 | Sample hand-off | Chunked: 64-sample DMA blocks (4 ms @ 16 kHz) | DMA fills the ring with no CPU cost. The ISR only wakes the task. Blocks amortise the per-block overhead, and the block size sets the latency. |
 | Bootloader | IDF 2nd-stage bootloader + 2 OTA slots, **no custom bootloader** | Mode switching (main / calibration / fw-update) happens inside the app with no reboot. OTA A/B gives automatic rollback for free, even though no backup was required. |
@@ -40,9 +41,21 @@ hop must be longer than the LED frame time.
    light_show(): overlays -> brightness -> power limit -> GPSPI2/GDMA -> WS2812B
 
  comm task (prio 5)      TCP 4210: frames -> comm.c dispatcher -> calibration / mode / fwu / cli
- discovery task (prio 3) UDP 4211: discovery replies + beacons
+                         + UDP live push (LIVE_SUBSCRIBE) to the connected host
+ discovery task (prio 3) UDP 4211: discovery replies + beacons (beacons only while connected)
  app_main (prio 1)       supervisor: watchdog feed, fatal reboot, health, OTA confirm
 ```
+
+WiFi: station only. Without a stored `sta_ssid` WiFi stays off and the device runs
+stand-alone. After a disconnect it reconnects forever with a back-off of 1 s -> 10 s
+(`NET_STA_RETRY_MIN_MS` / `_MAX_MS`); `ERR_WIFI_CONNECT` is reported once the back-off
+reaches 10 s and cleared on connect.
+
+Live data: after `LIVE_SUBSCRIBE` (UDP port, rate up to 100 Hz) the comm task sends the
+latest `GET_LIVE` snapshot as a UDP datagram to the host's IP at that rate (`MSG_DONTWAIT`,
+so a full send queue drops a frame instead of blocking). The stream stops when the TCP
+client sends nothing for 3 s (the host PINGs every 1 s) or disconnects. Details in
+`protocol.md`.
 
 Other tasks never touch the microphone, the pipeline state or the strip. They post requests:
 
@@ -99,7 +112,7 @@ algorithms, patterns, settings, CLI and protocol commands) is in `extending.md`.
 2. Implement `App/audio_processing/stages/stage_xxx.c`. Copy any existing stage as a template.
 3. Declare it with `extern` in `audio_types.h`, and add it to `s_all_stages` in `pipeline.c`.
 4. Insert it into one or more algorithms in `algorithms.c`.
-5. Run `Scripts/build.sh`. The host UI builds the parameter editors from the schema automatically.
+5. Run `Scripts/firmware/build.sh`. The host UI builds the parameter editors from the schema automatically.
 
 ## 5. Device modes and run modes
 
@@ -119,16 +132,19 @@ algorithms, patterns, settings, CLI and protocol commands) is in `extending.md`.
 | bootloader | 0x0000 | IDF 2nd-stage bootloader |
 | partition table | 0x8000 | `partitions.csv` |
 | nvs / otadata / phy | 0x9000-0xFFFF | WiFi PHY calibration, OTA boot selection |
-| ota_0 / ota_1 | 0x10000 / 0x1F0000 | 1.875 MiB each (image is ~0.9 MiB) |
+| ota_0 / ota_1 | 0x10000 / 0x1F0000 | 1.875 MiB each (image: debug ~906 KB, release ~884 KB) |
 | calib | 0x3D0000 | algorithm parameters, A/B 4 KiB slots |
-| settings | 0x3D8000 | device / network / run settings, A/B 4 KiB slots |
+| settings | 0x3D8000 | device / WiFi station / run settings, A/B 4 KiB slots |
 
 * Slot format: header (magic, version, store id, sequence, length, CRC-32), then
   `key/type/len/value` records. The full format is in Docs/protocol.md section 5.
 * A commit always writes the *other* slot with sequence + 1, so a power loss during a save
   keeps the previous data.
 * The calibration region can be read (`GET_CALIB_IMAGE`) and written as a whole
-  (`FW_BEGIN target=1`). Use `Scripts/make_calib_image.py` to build an image from JSON.
+  (`FW_BEGIN target=1`). Use `Scripts/firmware/make_calib_image.py` to build an image from JSON.
+* The settings region is written over USB by `Scripts/firmware/update_settings.sh`
+  (`make_settings_image.py` + esptool). Neither app flashing nor OTA touches `calib` or
+  `settings`.
 
 ## 7. Error handling
 
@@ -136,7 +152,8 @@ algorithms, patterns, settings, CLI and protocol commands) is in `extending.md`.
 * The most severe active error is shown on the strip:
   * the first *code* LEDs blink (red = error, amber = warning, 1 Hz);
   * FATAL errors also make the rest of the strip glow dim red, and the device reboots after 8 s.
-* Warnings disappear from the strip after 4 s, but stay in the log (`GET_ERRORS`, CLI `errors`).
+* Warnings disappear from the strip after 4 s, but stay in the log (`GET_ERRORS`, CLI `errors`;
+  debug builds only).
 * Watchdog:
   * Our own TG0 MWDT driver resets the chip after 3 s without a feed.
   * The supervisor feeds it only while every registered task has checked in: `rt` within

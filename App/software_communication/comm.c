@@ -106,6 +106,9 @@ static uint8_t cmd_get_info(wbuf_t *w)
 #ifdef ENABLE_SELF_DIAGNOSTICS
     flags |= BUILD_FLAG_SELF_DIAG;
 #endif
+#ifdef ENABLE_DEBUG_HOST
+    flags |= BUILD_FLAG_DEBUG_HOST;
+#endif
     w_u32(w, PROTOCOL_VERSION);
     w_u32(w, flags);
     w_u8(w, (uint8_t)mode_get());
@@ -131,22 +134,25 @@ static uint8_t cmd_get_info(wbuf_t *w)
     return ST_OK;
 }
 
-static uint8_t cmd_get_live(wbuf_t *w)
+/* Live snapshot, shared by GET_LIVE and the UDP stream (both run in the network task). */
+static uint16_t live_fill(uint8_t *buf, uint16_t cap)
 {
+    wbuf_t w = {.buf = buf, .cap = cap, .len = 0};
     live_snapshot_t ls;
     mode_get_live(&ls);
     static led_rgb_t px[LED_MAX_COUNT];
     uint16_t n = light_get_output(px, LED_MAX_COUNT);
-    w_u16(w, ls.level);
-    w_u16(w, ls.bpm_x10);
-    w_u16(w, ls.beat_count);
-    w_u16(w, ls.centroid);
-    w_u8(w, AUDIO_NUM_BANDS);
-    w_u8(w, 0);
-    w_u16(w, n);
-    for (int b = 0; b < AUDIO_NUM_BANDS; b++) w_u16(w, ls.bands[b]);
-    w_bytes(w, px, (uint16_t)(n * 3u));
-    return ST_OK;
+    w_u32(&w, (uint32_t)(esp_timer_get_time() / 1000));
+    w_u16(&w, ls.level);
+    w_u16(&w, ls.bpm_x10);
+    w_u16(&w, ls.beat_count);
+    w_u16(&w, ls.centroid);
+    w_u8(&w, AUDIO_NUM_BANDS);
+    w_u8(&w, (uint8_t)mode_get());
+    w_u16(&w, n);
+    for (int b = 0; b < AUDIO_NUM_BANDS; b++) w_u16(&w, ls.bands[b]);
+    w_bytes(&w, px, (uint16_t)(n * 3u));
+    return w.len;
 }
 
 static uint8_t cmd_get_algorithms(wbuf_t *w)
@@ -262,6 +268,7 @@ static uint8_t cmd_fw_end(void)
     return ST_OK;
 }
 
+#ifdef ENABLE_DEBUG_HOST
 static uint8_t cmd_get_errors(wbuf_t *w)
 {
     err_entry_t e[ERR_COUNT];
@@ -276,6 +283,7 @@ static uint8_t cmd_get_errors(wbuf_t *w)
     }
     return ST_OK;
 }
+#endif
 
 static uint8_t handle(uint8_t cmd, const uint8_t *req, uint16_t len, uint8_t *resp, uint16_t cap, uint16_t *resp_len)
 {
@@ -306,8 +314,18 @@ static uint8_t handle(uint8_t cmd, const uint8_t *req, uint16_t len, uint8_t *re
         break;
 
     case CMD_GET_LIVE:
-        st = cmd_get_live(&w);
+        w.len = live_fill(resp, cap);
         break;
+
+    case CMD_LIVE_SUBSCRIBE: {
+        if (len != 4) { st = ST_ERR_BAD_LEN; break; }
+        uint16_t port = (uint16_t)(req[0] | (req[1] << 8));
+        uint8_t hz = req[2];
+        if (hz > NET_LIVE_MAX_HZ) hz = NET_LIVE_MAX_HZ;
+        net_stream_set(port, hz, CMD_LIVE_FRAME);
+        w_u8(&w, port ? hz : 0);
+        break;
+    }
 
     case CMD_GET_ALGORITHMS:
         st = cmd_get_algorithms(&w);
@@ -350,6 +368,7 @@ static uint8_t handle(uint8_t cmd, const uint8_t *req, uint16_t len, uint8_t *re
         st = (mode_get() == DEV_MODE_CALIBRATION) ? calib_status(calib_reload()) : ST_ERR_WRONG_MODE;
         break;
 
+#ifdef ENABLE_DEBUG_HOST
     case CMD_GET_SETTINGS:
         w.len = (uint16_t)settings_serialize(resp, cap);
         break;
@@ -365,6 +384,15 @@ static uint8_t handle(uint8_t cmd, const uint8_t *req, uint16_t len, uint8_t *re
     case CMD_FACTORY_RESET:
         st = calib_status(settings_factory_reset());
         break;
+
+    case CMD_GET_ERRORS:
+        st = cmd_get_errors(&w);
+        break;
+
+    case CMD_CLEAR_ERRORS:
+        err_clear_all();
+        break;
+#endif
 
     case CMD_FW_BEGIN:
         st = cmd_fw_begin(req, len, &w);
@@ -390,45 +418,29 @@ static uint8_t handle(uint8_t cmd, const uint8_t *req, uint16_t len, uint8_t *re
         break;
     }
 
-    case CMD_CLI_EXEC: {
 #ifdef ENABLE_DEBUG_CLI
+    case CMD_CLI_EXEC: {
         char line[256];
         uint16_t n = len < sizeof(line) - 1 ? len : sizeof(line) - 1;
         memcpy(line, req, n);
         line[n] = '\0';
         uint16_t out_cap = cap < NET_FW_CHUNK_SIZE ? cap : NET_FW_CHUNK_SIZE;
         w.len = (uint16_t)cli_execute(line, (char *)resp, out_cap);
-#else
-        st = ST_ERR_NOT_SUPPORTED;
-#endif
         break;
     }
-
-    case CMD_GET_DIAG:
-#ifdef ENABLE_SELF_DIAGNOSTICS
-        w.len = (uint16_t)diag_report((char *)resp, cap);
-#else
-        st = ST_ERR_NOT_SUPPORTED;
 #endif
+
+#ifdef ENABLE_SELF_DIAGNOSTICS
+    case CMD_GET_DIAG:
+        w.len = (uint16_t)diag_report((char *)resp, cap);
         break;
 
     case CMD_RESET_DIAG:
-#ifdef ENABLE_SELF_DIAGNOSTICS
         diag_reset();
         mode_reset_rt_stats();
         pipeline_reset_timing();
-#else
-        st = ST_ERR_NOT_SUPPORTED;
+        break;
 #endif
-        break;
-
-    case CMD_GET_ERRORS:
-        st = cmd_get_errors(&w);
-        break;
-
-    case CMD_CLEAR_ERRORS:
-        err_clear_all();
-        break;
 
     default:
         st = ST_ERR_UNKNOWN_CMD;
@@ -465,7 +477,7 @@ void comm_init(void)
 
     net_config_t nc;
     settings_net_config(&nc);
-    if (net_start(&nc, handle, post_send) != HW_OK) {
+    if (net_start(&nc, handle, post_send, live_fill) != HW_OK) {
         ESP_LOGE(TAG, "network start failed - running stand-alone");
     }
 }

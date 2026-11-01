@@ -3,7 +3,7 @@
 A full on-target unit test suite is not part of the initial version.
 
 `host/test_host.c` is a quick regression net for the signal processing. It is built with
-the native PC compiler (`Scripts/run_host_tests.sh`, needs `gcc` in PATH, e.g. MSYS2 ucrt64)
+the native PC compiler (`Scripts/firmware/run_firmware_unit_tests.sh`, needs `gcc` in PATH, e.g. MSYS2 ucrt64)
 from the pure-C modules:
 
 * `Interface/signal_processing`
