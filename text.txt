@@ -1,10 +1,13 @@
-Build release : Scripts/build.sh --release
-Build debug   : Scripts/build.sh
-Flash release : Scripts/build.sh --release flash COM11
-Flash debug   : Scripts/build.sh flash COM11
+Build release : Scripts/firmware/build.bat -release
+Build debug   : Scripts/firmware/build.bat -debug
+Flash release : Scripts/firmware/flash.bat -COM11 -release
+Flash debug   : Scripts/firmware/flash.bat -COM11 -debug
 
-WiFi settings (device is station-only; replaces all stored settings, keeps calibration + firmware):
-Set WiFi (any build): Scripts/flash_settings.sh COM11 --ssid HomeWiFi --password secret [--name ledstrip]
-  or from JSON      : Scripts/flash_settings.sh COM11 settings.json
+output in build\firmware\<variant>\artefacts
+
+ Set WiFi (any build): Scripts/firmware/update_settings.bat -ssid HomeWiFi -password secret [-name ledstrip] [-COM11]
+  or from JSON      : Scripts/firmware/update_settings.bat -file settings.json -COM11
 Debug build only    : host app > Debug > Settings, then reboot the device
-After setting WiFi  : reboot, then start host: Scripts/host_run.sh [--device <ip>]
+After setting WiFi  : reboot, then start host: Scripts/software/host_run.sh [-device <ip>]
+
+Other: monitor.sh -COM11 | run_firmware_unit_tests.sh | Scripts/software/run_software_unit_tests.sh | Scripts/software/build.sh

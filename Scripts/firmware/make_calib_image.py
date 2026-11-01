@@ -3,7 +3,7 @@
 
 Encode (JSON -> image)::
 
-    python Scripts/make_calib_image.py params.json -o calib.bin [--sequence 1]
+    python Scripts/firmware/make_calib_image.py params.json -o calib.bin [--sequence 1]
 
     params.json = {"params": [{"stage": 0, "param": 1, "value": 40.0}, ...]}
     (extra keys such as "name"/"stage_name" are ignored, so a file exported
@@ -11,7 +11,7 @@ Encode (JSON -> image)::
 
 Decode (image -> JSON)::
 
-    python Scripts/make_calib_image.py --decode calib.bin [-o params.json]
+    python Scripts/firmware/make_calib_image.py --decode calib.bin [-o params.json]
 
 The image format is described in Docs/protocol.md section 5 (store_id 0,
 records keyed ``(stage_id << 8) | param_id``, f32 values, crc32 of records).
@@ -26,7 +26,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Host"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "Host"))
 
 from ledhost import protocol as P  # noqa: E402
 

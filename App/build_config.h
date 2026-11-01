@@ -39,7 +39,7 @@
 /**
  * INTERNAL_TEST_BUILD: development build. Enables the debug CLI and the self
  * diagnostics. Release builds are made by passing -DLEDFW_RELEASE_BUILD
- * (Scripts/build.sh --release), which leaves this macro undefined.
+ * (Scripts/firmware/build.sh -release), which leaves this macro undefined.
  */
 #ifndef LEDFW_RELEASE_BUILD
 #define INTERNAL_TEST_BUILD
@@ -197,7 +197,7 @@
 
 #define NET_DEFAULT_DEVICE_NAME     "ledstrip"
 /* Station only (no soft-AP): credentials come from the settings store, written by the
- * host in debug builds or by Scripts/flash_settings.sh. No SSID -> WiFi stays off. */
+ * host in debug builds or by Scripts/firmware/update_settings.sh. No SSID -> WiFi stays off. */
 #define NET_STA_RETRY_MIN_MS        1000    /**< First reconnect delay after a disconnect    */
 #define NET_STA_RETRY_MAX_MS        10000   /**< Reconnect back-off limit                    */
 

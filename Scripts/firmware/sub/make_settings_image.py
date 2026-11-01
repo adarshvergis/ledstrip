@@ -2,10 +2,10 @@
 """Build the settings partition image (WiFi credentials etc.) for a first flash over USB.
 
 Release firmware cannot change WiFi credentials from the host, so they are written once
-with esptool (Scripts/flash_settings.sh does both steps)::
+with esptool (Scripts/firmware/update_settings.sh does both steps)::
 
-    python Scripts/make_settings_image.py --ssid HomeWiFi --password secret [--name ledstrip] -o settings.bin
-    python Scripts/make_settings_image.py settings.json -o settings.bin
+    python Scripts/firmware/sub/make_settings_image.py --ssid HomeWiFi --password secret [--name ledstrip] -o settings.bin
+    python Scripts/firmware/sub/make_settings_image.py settings.json -o settings.bin
 
     settings.json = {"sta_ssid": "HomeWiFi", "sta_password": "secret", "device_name": "ledstrip",
                      "num_leds": 60, "max_current_ma": 500, "brightness": 160, ...}
@@ -22,7 +22,7 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "Host"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "Host"))
 
 from ledhost import protocol as P  # noqa: E402
 
