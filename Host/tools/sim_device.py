@@ -4,15 +4,17 @@ Lets the host software be developed and tested without hardware:
 
 * TCP command server (default 127.0.0.1:4210), one client at a time
   (a new connection replaces the old one),
+* UDP live stream (LIVE_SUBSCRIBE) pushed to the client's address,
 * UDP discovery responder (default 127.0.0.1:4211),
 * four fake algorithms built from five stages with FLOAT/INT/BOOL/ENUM params,
 * animated fake live data (beat at ~122 BPM, spectrum bands, LED strip),
-* settings TLV store, errors, CLI echo, diagnostics text,
+* debug build (default, --flags 15): settings TLV store, errors, CLI echo, diagnostics;
+  release build (--flags 0): those commands answer ERR_UNKNOWN_CMD like the firmware,
 * fake firmware update (APP and CALIB targets, real CRC/offset checks).
 
 Usage (from the repository root)::
 
-    python Host/tools/sim_device.py [--bind 127.0.0.1] [--flags 7] [--leds 60] [--fw-delay 0.005]
+    python Host/tools/sim_device.py [--bind 127.0.0.1] [--flags 15|0] [--leds 60] [--fw-delay 0.005]
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ import colorsys
 import logging
 import math
 import random
+import socket
 import struct
 import sys
 import time
@@ -85,10 +88,14 @@ ALGORITHMS = [
 ]
 
 DEFAULT_SETTINGS: dict[int, int | str] = {
-    1: "LED Strip Sim", 2: 0, 3: "", 4: "", 5: "", 6: "", 7: 6, 8: 1500, 9: 60,
+    1: "LED Strip Sim", 3: "HomeWiFi", 4: "", 8: 1500, 9: 60,
     10: 0, 11: 0, 12: 0, 13: 160, 14: 0,
 }
-REBOOT_SETTINGS = {1, 2, 3, 4, 5, 6, 7, 9, 14}
+REBOOT_SETTINGS = {1, 3, 4}
+DEBUG_HOST_CMDS = {Cmd.GET_SETTINGS, Cmd.SET_SETTING, Cmd.FACTORY_RESET_SETTINGS,
+                   Cmd.GET_ERRORS, Cmd.CLEAR_ERRORS}
+LIVE_LEASE_S = 3.0
+LIVE_MAX_HZ = 100
 
 
 class SimDevice:
@@ -111,6 +118,7 @@ class SimDevice:
         self.requests = 0
         self.offline_until = 0.0          # simulated boot time: refuse clients until then
         self.on_reboot = lambda: None     # set by TcpServer: drops the client connection
+        self.stream: tuple[int, int] | None = None   # (udp_port, rate_hz) set by LIVE_SUBSCRIBE
 
     # -- helpers ---------------------------------------------------------------
 
@@ -129,7 +137,7 @@ class SimDevice:
     def info(self) -> P.DeviceInfo:
         active_err = max((e.code for e in self.errors if e.severity >= 2), default=0)
         return P.DeviceInfo(
-            proto_version=1, build_flags=self.flags, device_mode=int(self.device_mode),
+            proto_version=P.PROTO_VERSION, build_flags=self.flags, device_mode=int(self.device_mode),
             run_mode=int(self.settings[10]), active_algorithm=int(self.settings[11]),
             num_algorithms=len(ALGORITHMS), active_pattern=int(self.settings[12]),
             num_patterns=NUM_PATTERNS, brightness=int(self.settings[13]),
@@ -204,7 +212,8 @@ class SimDevice:
                 width = int(4 + 10 * env)
                 for i in range(n):
                     put(i, colorsys.hsv_to_rgb(centroid / 32767, 1, 1) if abs(i - centre) < width else (0, 0, 0))
-        return P.LiveData(level, int(bpm * 10), beat_count, centroid, n, bands, bytes(leds))
+        return P.LiveData(self.uptime_ms, level, int(bpm * 10), beat_count, centroid, int(self.device_mode),
+                          bands, bytes(leds))
 
     # -- dispatcher ------------------------------------------------------------
 
@@ -225,6 +234,9 @@ class SimDevice:
     async def _dispatch(self, cmd: int, pl: bytes) -> tuple[int, bytes, bool]:
         OK = Status.OK
         mode = self.device_mode
+        if (cmd in DEBUG_HOST_CMDS and not self.flags & 8) or (cmd == Cmd.CLI_EXEC and not self.flags & 2) \
+                or (cmd in (Cmd.GET_DIAG, Cmd.RESET_DIAG) and not self.flags & 4):
+            return self._err(Status.ERR_UNKNOWN_CMD)    # not compiled into a release build
         fw_cmds = {Cmd.FW_DATA, Cmd.FW_END, Cmd.FW_ABORT}
         if mode == P.DeviceMode.FW_UPDATE and cmd not in fw_cmds | {Cmd.PING, Cmd.GET_INFO, Cmd.REBOOT}:
             return self._err(Status.ERR_WRONG_MODE, "firmware update in progress")
@@ -261,6 +273,13 @@ class SimDevice:
             return OK, b"", False
         if cmd == Cmd.GET_LIVE:
             return OK, self.live_data().encode(), False
+        if cmd == Cmd.LIVE_SUBSCRIBE:
+            if len(pl) != 4:
+                return self._err(Status.ERR_BAD_LEN)
+            port, hz, _ = struct.unpack("<HBB", pl)
+            hz = min(hz, LIVE_MAX_HZ)
+            self.stream = (port, hz) if port and hz else None
+            return OK, bytes([hz if port else 0]), False
         if cmd == Cmd.GET_ALGORITHMS:
             return OK, P.encode_algorithms(ALGORITHMS), False
         if cmd == Cmd.GET_STAGE_LIST:
@@ -386,12 +405,8 @@ class SimDevice:
         if cmd == Cmd.GET_CALIB_IMAGE:
             return OK, self.calib_image(), False
         if cmd == Cmd.CLI_EXEC:
-            if not self.flags & 2:
-                return self._err(Status.ERR_NOT_SUPPORTED)
             return OK, self._cli(pl.decode("ascii", "replace")).encode()[:4096], False
         if cmd in (Cmd.GET_DIAG, Cmd.RESET_DIAG):
-            if not self.flags & 4:
-                return self._err(Status.ERR_NOT_SUPPORTED)
             if cmd == Cmd.RESET_DIAG:
                 self.diag_max_loop_us = 0.0
                 return OK, b"", False
@@ -410,6 +425,7 @@ class SimDevice:
         self.boot_time = time.monotonic()
         self.device_mode = P.DeviceMode.MAIN
         self.fw = None
+        self.stream = None
         self.live = {sid: list(v) for sid, v in self.saved.items()}
 
     def _cli(self, line: str) -> str:
@@ -450,6 +466,7 @@ class TcpServer:
     def __init__(self, dev: SimDevice) -> None:
         self.dev = dev
         self.current: asyncio.StreamWriter | None = None
+        self.last_rx = 0.0
         dev.on_reboot = self._drop_current
 
     def _drop_current(self) -> None:
@@ -465,7 +482,10 @@ class TcpServer:
             log.info("new client %s replaces previous one", peer)
             self.current.close()
         self.current = writer
+        self.dev.stream = None
         log.info("client connected: %s", peer)
+        self.last_rx = time.monotonic()
+        streamer = asyncio.create_task(self._stream(writer, peer[0]))
         try:
             while True:
                 hdr_b = await reader.readexactly(P.HEADER_SIZE)
@@ -475,6 +495,7 @@ class TcpServer:
                     log.warning("closing connection: %s", e)
                     break
                 payload = await reader.readexactly(hdr.length) if hdr.length else b""
+                self.last_rx = time.monotonic()
                 status, body, close = await self.dev.handle(hdr.cmd, payload)
                 writer.write(P.encode_frame(hdr.cmd | P.RESPONSE_FLAG, hdr.seq, body, status))
                 await writer.drain()
@@ -484,8 +505,38 @@ class TcpServer:
         except (asyncio.IncompleteReadError, ConnectionError):
             pass
         finally:
+            streamer.cancel()
+            if self.current is writer:
+                self.dev.stream = None
             writer.close()
             log.info("client disconnected: %s", peer)
+
+    async def _stream(self, writer: asyncio.StreamWriter, host: str) -> None:
+        """Push LIVE_FRAME datagrams to the client while it is subscribed (like the firmware)."""
+        loop = asyncio.get_running_loop()
+        transport, _ = await loop.create_datagram_endpoint(asyncio.DatagramProtocol, family=socket.AF_INET)
+        seq = 0
+        due = time.monotonic()
+        try:
+            while not writer.is_closing():
+                sub = self.dev.stream if self.current is writer else None
+                now = time.monotonic()
+                if sub is None:
+                    due = now
+                    await asyncio.sleep(0.02)
+                    continue
+                if now - self.last_rx > LIVE_LEASE_S:
+                    log.info("live stream lease expired")
+                    self.dev.stream = None
+                    continue
+                port, hz = sub
+                if now >= due:
+                    transport.sendto(P.encode_frame(P.LIVE_FRAME, seq, self.dev.live_data().encode()), (host, port))
+                    seq = (seq + 1) & 0xFFFF
+                    due = max(due + 1.0 / hz, now)    # absolute schedule: coarse OS timers do not lower the rate
+                await asyncio.sleep(max(0.0, due - time.monotonic()))
+        finally:
+            transport.close()
 
 
 class UdpDiscovery(asyncio.DatagramProtocol):
@@ -507,7 +558,8 @@ async def main() -> None:
     ap.add_argument("--bind", default="127.0.0.1", help="address to bind TCP/UDP (default 127.0.0.1)")
     ap.add_argument("--tcp-port", type=int, default=P.TCP_PORT)
     ap.add_argument("--udp-port", type=int, default=P.UDP_PORT)
-    ap.add_argument("--flags", type=int, default=7, help="build_flags (bit1 CLI, bit2 diag; default 7)")
+    ap.add_argument("--flags", type=int, default=15,
+                    help="build_flags: 15 = debug build (CLI, diag, settings), 0 = release build (default 15)")
     ap.add_argument("--leds", type=int, default=60, help="LED_MAX_COUNT (default 60)")
     ap.add_argument("--fw-delay", type=float, default=0.005, help="artificial delay per FW_DATA chunk (s)")
     args = ap.parse_args()

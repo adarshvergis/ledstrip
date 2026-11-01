@@ -3,27 +3,40 @@
   Build / flash / monitor the LED strip firmware with ESP-IDF v5.3.
 
 .EXAMPLE
-  .\Scripts\build.ps1                       # debug (INTERNAL_TEST_BUILD) build
-  .\Scripts\build.ps1 -Release              # release build (no CLI / diagnostics) in build_release/
+  .\Scripts\build.ps1                       # debug (INTERNAL_TEST_BUILD) build in build/
+  .\Scripts\build.ps1 -Release              # release build (main view, calibration, FW update only) in build_release/
   .\Scripts\build.ps1 flash -Port COM5      # build + flash over the Xiao USB-C port
   .\Scripts\build.ps1 flash-monitor -Port COM5
   .\Scripts\build.ps1 monitor -Port COM5
+  .\Scripts\build.ps1 flash-settings -Port COM5 -File settings.bin   # WiFi credentials (Scripts/flash_settings.sh)
   .\Scripts\build.ps1 size | clean | fullclean | menuconfig
 
   IDF_PATH defaults to %USERPROFILE%\esp\v5.3.1\esp-idf.
-  Output images: build\led_strip_fw.bin (OTA / host "Firmware Update" file),
-  build\bootloader\bootloader.bin, build\partition_table\partition-table.bin.
+  A successful build copies its images to dist\debug\ or dist\release\:
+  led_strip_fw.bin (OTA / host "Firmware" tab file), bootloader.bin, partition-table.bin,
+  ota_data_initial.bin (the last three only for a first flash over USB).
 #>
+[CmdletBinding(PositionalBinding = $false)]
 param(
-    [Parameter(Position = 0)]
-    [ValidateSet("build", "flash", "monitor", "flash-monitor", "size", "clean", "fullclean", "menuconfig")]
-    [string]$Action = "build",
+    # Free-form words, same style as build.sh: an action, "--release" and/or a port (COM5)
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$Words = @(),
     [string]$Port = "",
+    [string]$File = "",
     [switch]$Release
 )
 
 $ErrorActionPreference = "Stop"
+$Actions = @("build", "flash", "monitor", "flash-monitor", "flash-settings", "size", "clean", "fullclean", "menuconfig")
+$Action = "build"
+foreach ($w in $Words) {
+    if ($w -in @("--release", "-release", "release")) { $Release = $true }
+    elseif ($w -match '^(COM\d+|/dev/.+)$') { $Port = $w }
+    elseif ($w -in $Actions) { $Action = $w }
+    else { throw "unknown argument '$w' (actions: $($Actions -join ', '); --release; COMx)" }
+}
 $Root = Split-Path -Parent $PSScriptRoot
+$SettingsAddr = "0x3D8000"      # settings partition, keep in sync with partitions.csv / build_config.h
 
 if (-not $env:IDF_PATH) { $env:IDF_PATH = Join-Path $env:USERPROFILE "esp\v5.3.1\esp-idf" }
 if (-not (Test-Path "$env:IDF_PATH\export.ps1")) { throw "ESP-IDF not found at $env:IDF_PATH (set IDF_PATH)" }
@@ -33,9 +46,21 @@ Remove-Item Env:MSYSTEM -ErrorAction SilentlyContinue
 . "$env:IDF_PATH\export.ps1" *> $null
 
 Set-Location $Root
+
+if ($Action -eq "flash-settings") {
+    if (-not $Port) { throw "flash-settings needs -Port COMx" }
+    if (-not $File -or -not (Test-Path $File)) { throw "flash-settings needs -File <settings image>" }
+    python -m esptool --chip esp32c3 -p $Port write_flash $SettingsAddr $File
+    exit $LASTEXITCODE
+}
+
+$BuildDir = "build"
+$Variant = "debug"
 $idfArgs = @()
 if ($Release) {
-    $idfArgs += @("-B", "build_release", "-DLEDFW_RELEASE=1")
+    $BuildDir = "build_release"
+    $Variant = "release"
+    $idfArgs += @("-B", $BuildDir, "-DLEDFW_RELEASE=1")
 }
 if ($Port) { $idfArgs += @("-p", $Port) }
 
@@ -54,4 +79,15 @@ switch ($Action) {
     "fullclean"     { idf.py @idfArgs fullclean }
     "menuconfig"    { idf.py @idfArgs menuconfig }
 }
-exit $LASTEXITCODE
+$rc = $LASTEXITCODE
+
+if ($rc -eq 0 -and $Action -in @("build", "flash", "flash-monitor")) {
+    $Dist = Join-Path $Root "dist\$Variant"
+    New-Item -ItemType Directory -Force -Path $Dist | Out-Null
+    Copy-Item (Join-Path $BuildDir "led_strip_fw.bin") $Dist -Force
+    Copy-Item (Join-Path $BuildDir "bootloader\bootloader.bin") $Dist -Force
+    Copy-Item (Join-Path $BuildDir "partition_table\partition-table.bin") $Dist -Force
+    Copy-Item (Join-Path $BuildDir "ota_data_initial.bin") $Dist -Force
+    Write-Host "$Variant images copied to dist\$Variant\"
+}
+exit $rc

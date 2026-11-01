@@ -1,16 +1,21 @@
-# Host <-> Device Protocol (v1)
+# Host <-> Device Protocol (v2)
 
 All multi-byte integers are **little-endian**. `f32` is IEEE-754 single precision.
 Strings inside payloads are **NUL-terminated** unless a fixed-size field is stated
 (fixed fields are NUL-padded).
+
+Changes from v1: WiFi is station only (no soft-AP; settings 2, 5, 6, 7 removed), new
+`LIVE_SUBSCRIBE` UDP live stream (0x07), `GET_LIVE` payload starts with `t_ms` and carries
+`device_mode`, build flag bit 3, debug-only commands are compiled out of release builds.
 
 ## 1. Transport
 
 | Item              | Value                                                        |
 |-------------------|--------------------------------------------------------------|
 | Command channel   | TCP, device listens on port **4210**, one client at a time   |
+| Live stream       | UDP, device -> host, to the port given in `LIVE_SUBSCRIBE`   |
 | Discovery         | UDP port **4211**                                            |
-| AP-mode device IP | `192.168.4.1`                                                |
+| Network           | the device joins an existing WiFi network (station only) with the credentials of settings 3/4; without an SSID WiFi stays off |
 
 ### 1.1 Discovery
 
@@ -18,11 +23,22 @@ Strings inside payloads are **NUL-terminated** unless a fixed-size field is stat
 * Every device answers (unicast, to the sender's address and port) with one ASCII line:
 
 ```
-LEDSTRIP proto=1 name=<device_name> ip=<a.b.c.d> port=4210 fw=<fw_version> mac=<aa:bb:cc:dd:ee:ff>
+LEDSTRIP proto=2 name=<device_name> ip=<a.b.c.d> port=4210 fw=<fw_version> mac=<aa:bb:cc:dd:ee:ff>
 ```
 
-* Devices also broadcast the same line, unsolicited, to `255.255.255.255:4211`
-  every 3 s. A host may listen on port 4211 to collect these beacons.
+* While connected to the network, devices also broadcast the same line, unsolicited, to
+  `255.255.255.255:4211` every 3 s. A host may listen on port 4211 to collect these beacons.
+
+### 1.2 Live stream
+
+After `LIVE_SUBSCRIBE` the device sends one UDP datagram per period to the IP address of the
+connected TCP client. Each datagram is one frame (section 2) with `cmd = 0x86`, `status = 0`,
+`seq` = free-running stream counter and the `GET_LIVE` payload. Only the newest snapshot is
+sent; a datagram that does not fit the WiFi queue is dropped (never delayed). The host should
+discard datagrams whose `seq` is not newer than the last one drawn.
+
+The subscription ends when the TCP client disconnects, sends `LIVE_SUBSCRIBE` with rate 0, or
+sends no request for **3 s** (lease). A host keeps it alive with `PING` about once per second.
 
 ## 2. Framing
 
@@ -64,9 +80,11 @@ Error responses may carry an ASCII message as payload (no NUL), or be empty.
 
 **Run mode** (`u8`): 0 = AUDIO (microphone + algorithm), 1 = PATTERN (pre-stored patterns, mic disabled)
 
-**Build flags** (`u32` bitfield): bit0 = INTERNAL_TEST_BUILD, bit1 = ENABLE_DEBUG_CLI, bit2 = ENABLE_SELF_DIAGNOSTICS
+**Build flags** (`u32` bitfield): bit0 = INTERNAL_TEST_BUILD, bit1 = ENABLE_DEBUG_CLI, bit2 = ENABLE_SELF_DIAGNOSTICS,
+bit3 = ENABLE_DEBUG_HOST. Debug builds set all four; release builds set none.
 
-**WiFi state** (`u8`): 0 = off, 1 = soft-AP, 2 = station connected, 3 = station connecting
+**WiFi state** (`u8`): 0 = off (no SSID stored), 2 = station connected, 3 = station connecting
+(1 was the soft-AP state of v1)
 
 **Param type** (`u8`): 0 = FLOAT, 1 = INT (value still sent as f32, integral), 2 = BOOL (0.0 / 1.0),
 3 = ENUM (value = index as f32; the param's `unit` string holds the option names separated by `|`)
@@ -78,6 +96,10 @@ Error responses may carry an ASCII message as payload (no NUL), or be empty.
 
 `req` = request payload, `resp` = response payload (when status is OK).
 
+Commands marked *(debug)* exist only in debug builds (build flag named in brackets); a release
+build does not contain them and answers `ERR_UNKNOWN_CMD`. Release builds serve the main view,
+calibration and firmware update only.
+
 ### 0x01 PING
 req: empty. resp: empty.
 
@@ -86,7 +108,7 @@ req: empty. resp (fixed 128 bytes):
 
 | Off | Type     | Field              |
 |-----|----------|--------------------|
-| 0   | u32      | proto_version (=1) |
+| 0   | u32      | proto_version (=2) |
 | 4   | u32      | build_flags        |
 | 8   | u8       | device_mode        |
 | 9   | u8       | run_mode           |
@@ -123,19 +145,26 @@ means "unchanged" (for brightness, 255 is therefore not settable here; use SET_S
 Takes effect immediately and is persisted. resp: empty.
 
 ### 0x06 GET_LIVE
-Snapshot of the processing state for visualisation. req: empty. resp:
+Snapshot of the processing state for visualisation (also the payload of the live stream
+datagrams, section 1.2). req: empty. resp:
 
 | Type              | Field |
 |-------------------|-------|
+| u32               | t_ms (device uptime when the snapshot was taken) |
 | u16               | level (0..32767, smoothed amplitude after AGC) |
 | u16               | bpm_x10 (estimated tempo * 10, 0 = unknown) |
 | u16               | beat_count (free-running counter, increments on every detected beat) |
 | u16               | centroid (0..32767, spectral centroid normalised to Nyquist) |
 | u8                | num_bands (B) |
-| u8                | reserved |
+| u8                | device_mode |
 | u16               | num_leds (L) |
 | u16[B]            | band levels (0..32767) |
 | u8[L*3]           | LED colours R,G,B as sent to the strip (after brightness/power limiting) |
+
+### 0x07 LIVE_SUBSCRIBE
+req: `u16 udp_port, u8 rate_hz, u8 reserved (0)`. Starts the live stream (section 1.2) to
+`udp_port` on the host's IP at `rate_hz` (clamped to 100). `rate_hz = 0` or `udp_port = 0`
+stops it. resp: `u8 applied_rate_hz` (0 = stopped).
 
 ### 0x10 GET_ALGORITHMS
 req: empty. resp: `u8 count`, then per algorithm:
@@ -166,7 +195,7 @@ req: `u8 stage_id` (`0xFF` = all stages). Restores defaults live (not saved). re
 ### 0x17 RELOAD_PARAMS  (CALIBRATION mode only)
 req: empty. Discards unsaved changes (reload from flash). resp: empty.
 
-### 0x20 GET_SETTINGS
+### 0x20 GET_SETTINGS *(debug: ENABLE_DEBUG_HOST)*
 req: empty. resp: sequence of TLV entries until end of payload:
 `u8 id, u8 type (0 = unsigned int, 1 = string), u8 len, u8 data[len]`
 (integers little-endian, `len` = 1, 2 or 4; strings without NUL).
@@ -174,12 +203,8 @@ req: empty. resp: sequence of TLV entries until end of payload:
 | id | name           | type | notes |
 |----|----------------|------|-------|
 | 1  | device_name    | str  | <= 31 chars |
-| 2  | wifi_mode      | u8   | 0 = auto (STA if SSID set, AP fallback), 1 = AP only, 2 = STA only |
-| 3  | sta_ssid       | str  | <= 32 |
-| 4  | sta_password   | str  | <= 64 |
-| 5  | ap_ssid        | str  | <= 32 (empty = auto `LEDSTRIP-XXXX`) |
-| 6  | ap_password    | str  | empty (open) or 8..64 |
-| 7  | ap_channel     | u8   | 1..13 |
+| 3  | sta_ssid       | str  | <= 32, home WiFi network (empty = WiFi off) |
+| 4  | sta_password   | str  | <= 64 (empty = open network) |
 | 8  | max_current_ma | u16  | LED power limit, 100..3000 |
 | 9  | num_leds       | u16  | active LEDs, 1..LED_MAX_COUNT |
 | 10 | run_mode       | u8   | see enum |
@@ -188,12 +213,17 @@ req: empty. resp: sequence of TLV entries until end of payload:
 | 13 | brightness     | u8   | 0..255 |
 | 14 | color_order    | u8   | 0 = GRB (WS2812B), 1 = RGB, 2 = BRG, 3 = RBG, 4 = GBR, 5 = BGR |
 
-### 0x21 SET_SETTING
-req: `u8 id, u8 len, u8 data[len]` (same encoding as above). Persisted immediately.
-resp: `u8 reboot_required` (1 for network settings).
+Ids 2 (wifi_mode) and 5-7 (soft-AP) were removed in v2; such records in an old settings store
+are ignored and setting them returns `ERR_BAD_ARG`. In release builds the settings can only be
+written over USB (`Scripts/flash_settings.sh`, image format in section 5, store_id 1).
 
-### 0x22 FACTORY_RESET_SETTINGS
-req: empty. Restores default settings (network included) and persists. resp: empty.
+### 0x21 SET_SETTING *(debug: ENABLE_DEBUG_HOST)*
+req: `u8 id, u8 len, u8 data[len]` (same encoding as above). Persisted immediately.
+resp: `u8 reboot_required` (1 for device_name and the WiFi credentials).
+
+### 0x22 FACTORY_RESET_SETTINGS *(debug: ENABLE_DEBUG_HOST)*
+req: empty. Restores default settings and persists. This erases the WiFi credentials, so the
+device does not rejoin the network after the next reboot. resp: empty.
 
 ### 0x30 FW_BEGIN
 req: `u8 target, u32 total_size, u32 crc32` (CRC-32/ISO-HDLC, same as Python `zlib.crc32`).
@@ -216,21 +246,23 @@ req: empty. Abort update, return to MAIN mode. resp: empty.
 req: empty. resp: the raw calibration region image currently in effect (<= 4096 bytes; see
 section 5). Can be written back later with FW_BEGIN target=CALIB.
 
-### 0x40 CLI_EXEC  (only if ENABLE_DEBUG_CLI)
+### 0x40 CLI_EXEC *(debug: ENABLE_DEBUG_CLI)*
 req: ASCII command line (no NUL). resp: ASCII output (<= 4096 bytes, may be truncated).
 Type `help` for the command list.
 
-### 0x50 GET_DIAG  (only if ENABLE_SELF_DIAGNOSTICS)
+### 0x50 GET_DIAG *(debug: ENABLE_SELF_DIAGNOSTICS)*
 req: empty. resp: ASCII text, one metric per line: `group\tname\tvalue\tunit\n`.
+Hosts read it once per connection (after a reboot or reconnect), not periodically.
 
-### 0x51 RESET_DIAG  (only if ENABLE_SELF_DIAGNOSTICS)
+### 0x51 RESET_DIAG *(debug: ENABLE_SELF_DIAGNOSTICS)*
 req: empty. Resets max/min trackers. resp: empty.
 
-### 0x60 GET_ERRORS
+### 0x60 GET_ERRORS *(debug: ENABLE_DEBUG_HOST)*
 req: empty. resp: `u8 count`, then per entry:
 `u8 code, u8 severity (0 info, 1 warning, 2 error, 3 fatal), u16 occurrences, u32 last_uptime_ms, name\0`
+The active error code is also in `GET_INFO` (all builds); errors are still shown on the strip.
 
-### 0x61 CLEAR_ERRORS
+### 0x61 CLEAR_ERRORS *(debug: ENABLE_DEBUG_HOST)*
 req: empty. resp: empty.
 
 ## 5. Calibration / settings region image format

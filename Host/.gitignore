@@ -1,4 +1,3 @@
-.venv/
 __pycache__/
 *.pyc
-host_settings.json
+ledapp_settings.json

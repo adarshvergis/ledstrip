@@ -41,7 +41,7 @@ static int c_version(int argc, char **argv, cli_out_t *o)
 static int c_info(int argc, char **argv, cli_out_t *o)
 {
     static const char *modes[] = {"MAIN", "CALIBRATION", "FW_UPDATE"};
-    static const char *net[] = {"off", "soft-AP", "station", "connecting"};
+    static const char *net[] = {"off", "-", "station", "connecting"};
     const settings_t *s = settings_get();
     cli_printf(o, "fw        %s, running from %s\n", FW_VERSION_STRING, fwu_running_partition());
     cli_printf(o, "uptime    %llu s\n", (unsigned long long)(esp_timer_get_time() / 1000000));

@@ -30,7 +30,7 @@
 #define FW_HW_NAME                  "Seeed Xiao ESP32C3 + WS2812B x60 + INMP441"
 
 /** Version of the host <-> device protocol (Docs/protocol.md). */
-#define PROTOCOL_VERSION            1
+#define PROTOCOL_VERSION            2
 
 /* ========================================================================== */
 /*  Build variants                                                            */
@@ -48,6 +48,9 @@
 #ifdef INTERNAL_TEST_BUILD
 #define ENABLE_DEBUG_CLI            /**< Text command line over the network (CMD 0x40) */
 #define ENABLE_SELF_DIAGNOSTICS     /**< Heap/stack/CPU/benchmark reporting (CMD 0x50) */
+/** Debug host commands: settings incl. WiFi credentials (0x20-0x22), error list
+ *  (0x60/0x61). Release builds only serve main view, calibration and firmware update. */
+#define ENABLE_DEBUG_HOST
 #endif
 
 /** Alias used by the host software documentation. */
@@ -59,6 +62,7 @@
 #define BUILD_FLAG_INTERNAL_TEST    (1u << 0)
 #define BUILD_FLAG_DEBUG_CLI        (1u << 1)
 #define BUILD_FLAG_SELF_DIAG        (1u << 2)
+#define BUILD_FLAG_DEBUG_HOST       (1u << 3)
 
 /* ========================================================================== */
 /*  Boot messages (printed on the USB console)                                */
@@ -192,16 +196,15 @@
 #define NET_RX_IDLE_TIMEOUT_S       120     /**< Drop an idle client after this time         */
 
 #define NET_DEFAULT_DEVICE_NAME     "ledstrip"
-#define NET_DEFAULT_AP_SSID_PREFIX  "LEDSTRIP-"   /**< + last 2 MAC bytes                   */
-#define NET_DEFAULT_AP_PASSWORD     "ledstrip123" /**< >= 8 chars, empty = open AP           */
-#define NET_DEFAULT_AP_CHANNEL      6
-#define NET_AP_MAX_CLIENTS          2
-#define NET_STA_CONNECT_TIMEOUT_MS  15000   /**< Then fall back to soft-AP (wifi_mode auto) */
-#define NET_STA_RETRY_PERIOD_MS     60000   /**< Retry station while in fallback AP          */
+/* Station only (no soft-AP): credentials come from the settings store, written by the
+ * host in debug builds or by Scripts/flash_settings.sh. No SSID -> WiFi stays off. */
+#define NET_STA_RETRY_MIN_MS        1000    /**< First reconnect delay after a disconnect    */
+#define NET_STA_RETRY_MAX_MS        10000   /**< Reconnect back-off limit                    */
 
-#define NET_WIFI_MODE_AUTO              0
-#define NET_WIFI_MODE_AP                1
-#define NET_WIFI_MODE_STA               2
+/* Live stream (CMD_LIVE_SUBSCRIBE): UDP datagrams pushed to the host, latest snapshot only. */
+#define NET_LIVE_DEFAULT_HZ         60
+#define NET_LIVE_MAX_HZ             100
+#define NET_LIVE_LEASE_MS           3000    /**< Stream stops without host traffic this long  */
 
 /* ========================================================================== */
 /*  RTOS tasks                                                                */

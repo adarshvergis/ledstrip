@@ -7,7 +7,7 @@ Encode (JSON -> image)::
 
     params.json = {"params": [{"stage": 0, "param": 1, "value": 40.0}, ...]}
     (extra keys such as "name"/"stage_name" are ignored, so a file exported
-    from the host UI can be used directly)
+    from the host app can be used directly)
 
 Decode (image -> JSON)::
 
@@ -15,8 +15,8 @@ Decode (image -> JSON)::
 
 The image format is described in Docs/protocol.md section 5 (store_id 0,
 records keyed ``(stage_id << 8) | param_id``, f32 values, crc32 of records).
-Upload the image from the host UI: Admin > Firmware update > target
-"Calibration region" (the firmware rewrites the sequence number).
+Upload the image from the host app: Firmware tab > "Calibration region image"
+(the firmware rewrites the sequence number).
 """
 
 from __future__ import annotations

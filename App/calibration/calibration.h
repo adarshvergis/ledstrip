@@ -17,6 +17,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include "build_config.h"
 #include "network.h"
 
 /* calibration result codes (negative = error) */
@@ -55,14 +56,12 @@ void calib_reload_from_store(void);
 
 /* ---- Settings ------------------------------------------------------------ */
 
+/* Ids 2 (wifi_mode) and 5-7 (soft-AP) are retired: the device is station-only.
+ * Records with these keys in an old settings store are ignored. */
 typedef enum {
     SET_DEVICE_NAME = 1,
-    SET_WIFI_MODE = 2,
     SET_STA_SSID = 3,
     SET_STA_PASSWORD = 4,
-    SET_AP_SSID = 5,
-    SET_AP_PASSWORD = 6,
-    SET_AP_CHANNEL = 7,
     SET_MAX_CURRENT_MA = 8,
     SET_NUM_LEDS = 9,
     SET_RUN_MODE = 10,
@@ -75,12 +74,8 @@ typedef enum {
 
 typedef struct {
     char     device_name[32];
-    uint8_t  wifi_mode;
     char     sta_ssid[33];
     char     sta_pass[65];
-    char     ap_ssid[33];
-    char     ap_pass[65];
-    uint8_t  ap_channel;
     uint16_t max_current_ma;
     uint16_t num_leds;
     uint8_t  run_mode;
@@ -92,20 +87,22 @@ typedef struct {
 
 const settings_t *settings_get(void);
 
+#ifdef ENABLE_DEBUG_HOST
 /**
  * Set one setting from its protocol encoding; validated, persisted and applied live
  * where possible. @p reboot_required is set for network settings.
  */
 int settings_set(uint8_t id, const uint8_t *data, uint8_t len, bool *reboot_required);
 
-/** Change the run configuration (0xFF = unchanged), persist and apply. */
-int settings_set_run_config(uint8_t run_mode, uint8_t algorithm, uint8_t pattern, uint8_t brightness);
-
 /** Serialise all settings as TLV (protocol cmd 0x20). Returns length. */
 size_t settings_serialize(uint8_t *out, size_t cap);
 
 /** Restore and persist default settings. */
 int settings_factory_reset(void);
+#endif
+
+/** Change the run configuration (0xFF = unchanged), persist and apply. */
+int settings_set_run_config(uint8_t run_mode, uint8_t algorithm, uint8_t pattern, uint8_t brightness);
 
 /** Network configuration derived from the settings. */
 void settings_net_config(net_config_t *nc);

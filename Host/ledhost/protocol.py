@@ -1,4 +1,4 @@
-"""Binary host <-> device protocol (v1), as specified in Docs/protocol.md.
+"""Binary host <-> device protocol (v2), as specified in Docs/protocol.md.
 
 This module is transport-free: it only converts between bytes and Python
 objects. It contains
@@ -17,7 +17,7 @@ from __future__ import annotations
 import re
 import struct
 import zlib
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import Any
 
@@ -25,10 +25,9 @@ from typing import Any
 # Constants
 # ---------------------------------------------------------------------------
 
-PROTO_VERSION = 1
+PROTO_VERSION = 2
 TCP_PORT = 4210
 UDP_PORT = 4211
-AP_DEVICE_IP = "192.168.4.1"
 
 MAGIC = 0x534C               # bytes 'L','S' on the wire (little-endian u16)
 HEADER = struct.Struct("<HBBHH")
@@ -45,6 +44,7 @@ CFG_HEADER = struct.Struct("<IHHIII")
 STORE_CALIB = 0
 STORE_SETTINGS = 1
 SLOT_SIZE = 4096
+SETTINGS_REGION_ADDR = 0x003D8000   # App/build_config.h, partitions.csv
 
 
 class Cmd(IntEnum):
@@ -56,6 +56,7 @@ class Cmd(IntEnum):
     SET_DEVICE_MODE = 0x04
     SET_RUN_CONFIG = 0x05
     GET_LIVE = 0x06
+    LIVE_SUBSCRIBE = 0x07
     GET_ALGORITHMS = 0x10
     GET_STAGE_LIST = 0x11
     GET_STAGE_SCHEMA = 0x12
@@ -64,7 +65,7 @@ class Cmd(IntEnum):
     SAVE_PARAMS = 0x15
     RESET_PARAMS = 0x16
     RELOAD_PARAMS = 0x17
-    GET_SETTINGS = 0x20
+    GET_SETTINGS = 0x20          # debug builds only (0x20-0x22, 0x40, 0x5x, 0x6x)
     SET_SETTING = 0x21
     FACTORY_RESET_SETTINGS = 0x22
     FW_BEGIN = 0x30
@@ -77,6 +78,10 @@ class Cmd(IntEnum):
     RESET_DIAG = 0x51
     GET_ERRORS = 0x60
     CLEAR_ERRORS = 0x61
+
+
+# cmd byte of the UDP live stream datagrams (payload = GET_LIVE response)
+LIVE_FRAME = Cmd.GET_LIVE | RESPONSE_FLAG
 
 
 class Status(IntEnum):
@@ -96,7 +101,7 @@ class Status(IntEnum):
 
 STATUS_TEXT: dict[int, str] = {
     Status.OK: "OK",
-    Status.ERR_UNKNOWN_CMD: "Command not recognised by the device",
+    Status.ERR_UNKNOWN_CMD: "Command not available in this firmware build",
     Status.ERR_BAD_LEN: "Payload length wrong for the command",
     Status.ERR_BAD_ARG: "Argument out of range or unknown id",
     Status.ERR_WRONG_MODE: "Command not allowed in the current device mode",
@@ -106,14 +111,6 @@ STATUS_TEXT: dict[int, str] = {
     Status.ERR_NOT_SUPPORTED: "Feature not compiled into this firmware build",
     Status.ERR_INTERNAL: "Internal device error",
 }
-
-
-def status_name(code: int) -> str:
-    """Return the symbolic name of a status code (or ``STATUS_<n>``)."""
-    try:
-        return Status(code).name
-    except ValueError:
-        return f"STATUS_{code}"
 
 
 class DeviceMode(IntEnum):
@@ -133,11 +130,11 @@ class BuildFlag(IntEnum):
     INTERNAL_TEST_BUILD = 0
     ENABLE_DEBUG_CLI = 1
     ENABLE_SELF_DIAGNOSTICS = 2
+    ENABLE_DEBUG_HOST = 3
 
 
 class WifiState(IntEnum):
     OFF = 0
-    SOFT_AP = 1
     STA_CONNECTED = 2
     STA_CONNECTING = 3
 
@@ -156,6 +153,13 @@ class FwTarget(IntEnum):
 
 class ProtocolError(Exception):
     """Raised when a frame or payload cannot be decoded."""
+
+
+def enum_name(enum: type[IntEnum], value: int) -> str:
+    try:
+        return enum(value).name
+    except ValueError:
+        return f"UNKNOWN_{value}"
 
 
 # ---------------------------------------------------------------------------
@@ -212,9 +216,6 @@ class Reader:
     def u8(self) -> int:
         return self._take(1)[0]
 
-    def i8(self) -> int:
-        return struct.unpack("<b", self._take(1))[0]
-
     def u16(self) -> int:
         return struct.unpack("<H", self._take(2))[0]
 
@@ -235,9 +236,6 @@ class Reader:
         self.pos = end + 1
         return s
 
-    def fixed_str(self, n: int) -> str:
-        return self._take(n).split(b"\0", 1)[0].decode("utf-8", "replace")
-
     def remaining(self) -> int:
         return len(self.data) - self.pos
 
@@ -256,7 +254,7 @@ def round_f32(v: float) -> float:
     return struct.unpack("<f", struct.pack("<f", v))[0]
 
 
-def _clean_float(v: float) -> float:
+def clean_float(v: float) -> float:
     """Present an f32 as a short decimal (0.1f -> 0.1 instead of 0.10000000149)."""
     return float(f"{v:.7g}")
 
@@ -292,6 +290,7 @@ class DeviceInfo:
     ip_address: str
 
     _FMT = struct.Struct("<IIBBBBBBBBIIHHBBbB24s24s32s16s")
+    _STR_SIZES = (24, 24, 32, 16)
 
     @classmethod
     def decode(cls, payload: bytes) -> "DeviceInfo":
@@ -303,68 +302,50 @@ class DeviceInfo:
         return cls(*v)
 
     def encode(self) -> bytes:
-        d = asdict(self)
-        vals = list(d.values())
-        sizes = (24, 24, 32, 16)
+        vals = list(self.__dict__.values())
         for k, i in enumerate(range(18, 22)):
-            vals[i] = _fixed(vals[i], sizes[k])
+            vals[i] = _fixed(vals[i], self._STR_SIZES[k])
         return self._FMT.pack(*vals)
 
-    def to_json(self) -> dict[str, Any]:
-        d = asdict(self)
-        d["has_cli"] = bool(self.build_flags & (1 << BuildFlag.ENABLE_DEBUG_CLI))
-        d["has_diag"] = bool(self.build_flags & (1 << BuildFlag.ENABLE_SELF_DIAGNOSTICS))
-        d["internal_test_build"] = bool(self.build_flags & (1 << BuildFlag.INTERNAL_TEST_BUILD))
-        d["device_mode_name"] = _enum_name(DeviceMode, self.device_mode)
-        d["run_mode_name"] = _enum_name(RunMode, self.run_mode)
-        d["wifi_state_name"] = _enum_name(WifiState, self.wifi_state)
-        return d
-
-
-def _enum_name(enum: type[IntEnum], value: int) -> str:
-    try:
-        return enum(value).name
-    except ValueError:
-        return f"UNKNOWN_{value}"
+    def has(self, flag: BuildFlag) -> bool:
+        return bool(self.build_flags & (1 << flag))
 
 
 @dataclass
 class LiveData:
+    t_ms: int            # device uptime when the snapshot was taken
     level: int
     bpm_x10: int
     beat_count: int
     centroid: int
-    num_leds: int
+    device_mode: int
     bands: list[int]
-    leds: bytes  # R,G,B triplets
+    leds: bytes          # R,G,B triplets
+
+    _FIXED = struct.Struct("<IHHHHBBH")
 
     @classmethod
     def decode(cls, payload: bytes) -> "LiveData":
-        r = Reader(payload)
-        level, bpm, beats, centroid = r.u16(), r.u16(), r.u16(), r.u16()
-        nb = r.u8()
-        r.u8()  # reserved
-        nl = r.u16()
-        bands = [r.u16() for _ in range(nb)]
-        leds = r.raw(nl * 3)
-        return cls(level, bpm, beats, centroid, nl, bands, leds)
+        if len(payload) < cls._FIXED.size:
+            raise ProtocolError("live payload truncated")
+        t, level, bpm, beats, centroid, nb, mode, nl = cls._FIXED.unpack_from(payload)
+        off = cls._FIXED.size
+        if len(payload) < off + nb * 2 + nl * 3:
+            raise ProtocolError("live payload truncated")
+        bands = list(struct.unpack_from(f"<{nb}H", payload, off))
+        off += nb * 2
+        return cls(t, level, bpm, beats, centroid, mode, bands, payload[off:off + nl * 3])
 
     def encode(self) -> bytes:
-        out = struct.pack("<HHHHBBH", self.level, self.bpm_x10, self.beat_count,
-                          self.centroid, len(self.bands), 0, self.num_leds)
-        out += struct.pack(f"<{len(self.bands)}H", *self.bands)
-        return out + bytes(self.leds[: self.num_leds * 3])
+        nl = len(self.leds) // 3
+        out = self._FIXED.pack(self.t_ms & 0xFFFFFFFF, self.level, self.bpm_x10, self.beat_count,
+                               self.centroid, len(self.bands), self.device_mode, nl)
+        return out + struct.pack(f"<{len(self.bands)}H", *self.bands) + bytes(self.leds)
 
-    def to_json(self) -> dict[str, Any]:
-        return {
-            "level": self.level,
-            "bpm": self.bpm_x10 / 10.0,
-            "beat_count": self.beat_count,
-            "centroid": self.centroid,
-            "num_leds": self.num_leds,
-            "bands": self.bands,
-            "leds": self.leds.hex(),  # compact: 6 hex chars per LED
-        }
+
+def build_live_subscribe(udp_port: int, rate_hz: int) -> bytes:
+    """LIVE_SUBSCRIBE payload; rate 0 (or port 0) stops the stream."""
+    return struct.pack("<HBB", udp_port, rate_hz, 0)
 
 
 @dataclass
@@ -413,13 +394,10 @@ class ParamSchema:
     name: str
     unit: str
 
-    def to_json(self) -> dict[str, Any]:
-        d = asdict(self)
-        for k in ("min", "max", "default", "step"):
-            d[k] = _clean_float(d[k])
-        d["type_name"] = _enum_name(ParamType, self.type)
-        d["options"] = self.unit.split("|") if self.type == ParamType.ENUM else None
-        return d
+    @property
+    def options(self) -> list[str]:
+        """ENUM option names (the unit string holds them, '|'-separated)."""
+        return self.unit.split("|") if self.type == ParamType.ENUM else []
 
 
 @dataclass
@@ -428,10 +406,6 @@ class StageSchema:
     name: str
     description: str
     params: list[ParamSchema] = field(default_factory=list)
-
-    def to_json(self) -> dict[str, Any]:
-        return {"id": self.id, "name": self.name, "description": self.description,
-                "params": [p.to_json() for p in self.params]}
 
 
 _PARAM_HDR = struct.Struct("<BBffff")
@@ -443,7 +417,8 @@ def decode_stage_schema(payload: bytes) -> StageSchema:
     st = StageSchema(sid, r.cstr(), r.cstr())
     for _ in range(n):
         pid, ptype, mn, mx, df, step = _PARAM_HDR.unpack(r.raw(_PARAM_HDR.size))
-        st.params.append(ParamSchema(pid, ptype, mn, mx, df, step, r.cstr(), r.cstr()))
+        st.params.append(ParamSchema(pid, ptype, clean_float(mn), clean_float(mx), clean_float(df),
+                                     clean_float(step), r.cstr(), r.cstr()))
     return st
 
 
@@ -458,7 +433,7 @@ def decode_params(payload: bytes) -> tuple[int, list[float]]:
     """Decode GET_PARAMS response -> (stage_id, values)."""
     r = Reader(payload)
     sid, n = r.u8(), r.u8()
-    return sid, [_clean_float(r.f32()) for _ in range(n)]
+    return sid, [clean_float(r.f32()) for _ in range(n)]
 
 
 def encode_params(stage_id: int, values: list[float]) -> bytes:
@@ -487,11 +462,9 @@ class ErrorEntry:
 
     SEVERITY_NAMES = ("info", "warning", "error", "fatal")
 
-    def to_json(self) -> dict[str, Any]:
-        d = asdict(self)
-        d["severity_name"] = (self.SEVERITY_NAMES[self.severity]
-                              if self.severity < len(self.SEVERITY_NAMES) else str(self.severity))
-        return d
+    @property
+    def severity_name(self) -> str:
+        return self.SEVERITY_NAMES[self.severity] if self.severity < len(self.SEVERITY_NAMES) else str(self.severity)
 
 
 def decode_errors(payload: bytes) -> list[ErrorEntry]:
@@ -510,20 +483,18 @@ def encode_errors(errors: list[ErrorEntry]) -> bytes:
     return out
 
 
-def decode_diag(text: str) -> list[dict[str, str]]:
-    """Split GET_DIAG text into rows of group/name/value/unit."""
+def decode_diag(text: str) -> list[tuple[str, str, str, str]]:
+    """Split GET_DIAG text into (group, name, value, unit) rows."""
     rows = []
     for line in text.splitlines():
-        if not line.strip():
-            continue
-        parts = line.split("\t")
-        parts += [""] * (4 - len(parts))
-        rows.append({"group": parts[0], "name": parts[1], "value": parts[2], "unit": "\t".join(parts[3:])})
+        if line.strip():
+            parts = line.split("\t") + ["", "", "", ""]
+            rows.append((parts[0], parts[1], parts[2], parts[3]))
     return rows
 
 
 # ---------------------------------------------------------------------------
-# Settings (TLV)
+# Settings (TLV, debug builds only)
 # ---------------------------------------------------------------------------
 
 SETTING_INT = 0
@@ -538,16 +509,14 @@ class SettingDef:
     size: int        # int: byte width; str: max length
     minimum: int = 0
     maximum: int = 0
+    reboot: bool = False
 
 
+# ids 2 (wifi_mode) and 5-7 (soft-AP) were removed in protocol v2 (station only)
 SETTINGS: list[SettingDef] = [
-    SettingDef(1, "device_name", SETTING_STR, 31),
-    SettingDef(2, "wifi_mode", SETTING_INT, 1, 0, 2),
-    SettingDef(3, "sta_ssid", SETTING_STR, 32),
-    SettingDef(4, "sta_password", SETTING_STR, 64),
-    SettingDef(5, "ap_ssid", SETTING_STR, 32),
-    SettingDef(6, "ap_password", SETTING_STR, 64),
-    SettingDef(7, "ap_channel", SETTING_INT, 1, 1, 13),
+    SettingDef(1, "device_name", SETTING_STR, 31, reboot=True),
+    SettingDef(3, "sta_ssid", SETTING_STR, 32, reboot=True),
+    SettingDef(4, "sta_password", SETTING_STR, 64, reboot=True),
     SettingDef(8, "max_current_ma", SETTING_INT, 2, 100, 3000),
     SettingDef(9, "num_leds", SETTING_INT, 2, 1, 65535),
     SettingDef(10, "run_mode", SETTING_INT, 1, 0, 1),
@@ -558,6 +527,7 @@ SETTINGS: list[SettingDef] = [
 ]
 SETTINGS_BY_ID = {s.id: s for s in SETTINGS}
 SETTINGS_BY_NAME = {s.name: s for s in SETTINGS}
+COLOR_ORDERS = ("GRB", "RGB", "BRG", "RBG", "GBR", "BGR")
 
 
 def decode_settings(payload: bytes) -> dict[int, int | str]:
@@ -567,10 +537,7 @@ def decode_settings(payload: bytes) -> dict[int, int | str]:
     while r.remaining() > 0:
         sid, stype, ln = r.u8(), r.u8(), r.u8()
         data = r.raw(ln)
-        if stype == SETTING_STR:
-            out[sid] = data.decode("utf-8", "replace")
-        else:
-            out[sid] = int.from_bytes(data, "little") if data else 0
+        out[sid] = data.decode("utf-8", "replace") if stype == SETTING_STR else int.from_bytes(data, "little")
     return out
 
 
@@ -580,8 +547,6 @@ def encode_setting_value(sdef: SettingDef, value: int | str) -> bytes:
         data = str(value).encode("utf-8")
         if len(data) > sdef.size:
             raise ValueError(f"{sdef.name}: at most {sdef.size} bytes")
-        if sdef.name == "ap_password" and 0 < len(data) < 8:
-            raise ValueError("ap_password must be empty (open) or 8..64 characters")
         return data
     try:
         iv = int(value)
@@ -592,19 +557,12 @@ def encode_setting_value(sdef: SettingDef, value: int | str) -> bytes:
     return iv.to_bytes(sdef.size, "little")
 
 
-def encode_setting_value_loose(sdef: SettingDef, value: int | str) -> bytes:
-    """Encode a setting value exactly as the device would report it (no validation)."""
-    if sdef.type == SETTING_STR:
-        return str(value).encode("utf-8")
-    return int(value).to_bytes(sdef.size, "little")
-
-
 def encode_settings_tlv(values: dict[int, int | str]) -> bytes:
     """Encode a GET_SETTINGS response (used by the simulator)."""
     out = b""
     for sid, val in values.items():
         sdef = SETTINGS_BY_ID[sid]
-        data = encode_setting_value_loose(sdef, val)
+        data = str(val).encode("utf-8") if sdef.type == SETTING_STR else int(val).to_bytes(sdef.size, "little")
         out += bytes([sid, sdef.type, len(data)]) + data
     return out
 
@@ -705,5 +663,21 @@ def decode_calib_image(img: bytes) -> list[dict[str, Any]]:
     for key, t, data in info["records"]:
         if t == 0 and len(data) == 4:
             out.append({"stage": key >> 8, "param": key & 0xFF,
-                        "value": _clean_float(struct.unpack("<f", data)[0])})
+                        "value": clean_float(struct.unpack("<f", data)[0])})
     return out
+
+
+def encode_settings_region(values: dict[str, int | str], sequence: int = 1) -> bytes:
+    """Build the whole settings partition content (slot A = image, slot B = erased).
+
+    ``values`` maps setting names (``SETTINGS_BY_NAME``) to values; settings not given
+    fall back to the firmware defaults. Written with esptool at SETTINGS_REGION_ADDR.
+    """
+    recs = []
+    for name, val in values.items():
+        sdef = SETTINGS_BY_NAME.get(name)
+        if sdef is None:
+            raise ValueError(f"unknown setting '{name}' (known: {', '.join(SETTINGS_BY_NAME)})")
+        recs.append((sdef.id, sdef.type, encode_setting_value(sdef, val)))
+    img = encode_region_image(recs, STORE_SETTINGS, sequence)
+    return img + b"\xFF" * (2 * SLOT_SIZE - len(img))

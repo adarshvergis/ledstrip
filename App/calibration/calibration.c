@@ -161,9 +161,6 @@ static void settings_defaults(settings_t *s)
 {
     memset(s, 0, sizeof(*s));
     strncpy(s->device_name, NET_DEFAULT_DEVICE_NAME, sizeof(s->device_name) - 1);
-    s->wifi_mode = NET_WIFI_MODE_AUTO;
-    strncpy(s->ap_pass, NET_DEFAULT_AP_PASSWORD, sizeof(s->ap_pass) - 1);
-    s->ap_channel = NET_DEFAULT_AP_CHANNEL;
     s->max_current_ma = LED_DEFAULT_MAX_CURRENT_MA;
     s->num_leds = LED_DEFAULT_COUNT;
     s->run_mode = RUN_MODE_AUDIO;
@@ -179,12 +176,8 @@ static void settings_load(void)
     settings_defaults(&d);
     cfg_store_t st = CFG_STORE_SETTINGS;
     cfg_get_str(st, SET_DEVICE_NAME, s_set.device_name, sizeof(s_set.device_name), d.device_name);
-    s_set.wifi_mode = (uint8_t)cfg_get_uint(st, SET_WIFI_MODE, d.wifi_mode);
     cfg_get_str(st, SET_STA_SSID, s_set.sta_ssid, sizeof(s_set.sta_ssid), d.sta_ssid);
     cfg_get_str(st, SET_STA_PASSWORD, s_set.sta_pass, sizeof(s_set.sta_pass), d.sta_pass);
-    cfg_get_str(st, SET_AP_SSID, s_set.ap_ssid, sizeof(s_set.ap_ssid), d.ap_ssid);
-    cfg_get_str(st, SET_AP_PASSWORD, s_set.ap_pass, sizeof(s_set.ap_pass), d.ap_pass);
-    s_set.ap_channel = (uint8_t)cfg_get_uint(st, SET_AP_CHANNEL, d.ap_channel);
     s_set.max_current_ma = (uint16_t)cfg_get_uint(st, SET_MAX_CURRENT_MA, d.max_current_ma);
     s_set.num_leds = (uint16_t)cfg_get_uint(st, SET_NUM_LEDS, d.num_leds);
     s_set.run_mode = (uint8_t)cfg_get_uint(st, SET_RUN_MODE, d.run_mode);
@@ -194,8 +187,6 @@ static void settings_load(void)
     s_set.color_order = (uint8_t)cfg_get_uint(st, SET_COLOR_ORDER, d.color_order);
 
     /* repair out-of-range values (e.g. after a firmware with fewer algorithms) */
-    if (s_set.wifi_mode > NET_WIFI_MODE_STA) s_set.wifi_mode = d.wifi_mode;
-    if (s_set.ap_channel < 1 || s_set.ap_channel > 13) s_set.ap_channel = d.ap_channel;
     if (s_set.max_current_ma < 100 || s_set.max_current_ma > 3000) s_set.max_current_ma = d.max_current_ma;
     if (s_set.num_leds < 1 || s_set.num_leds > LED_MAX_COUNT) s_set.num_leds = d.num_leds;
     if (s_set.run_mode > RUN_MODE_PATTERN) s_set.run_mode = d.run_mode;
@@ -218,6 +209,7 @@ static void apply_live(void)
     mode_apply_run_config(s_set.run_mode, s_set.algorithm, s_set.pattern);
 }
 
+#ifdef ENABLE_DEBUG_HOST
 static uint32_t decode_uint(const uint8_t *d, uint8_t len)
 {
     uint32_t v = 0;
@@ -252,26 +244,6 @@ int settings_set(uint8_t id, const uint8_t *data, uint8_t len, bool *reboot_requ
         break;
     case SET_STA_PASSWORD:
         r = set_str(s_set.sta_pass, sizeof(s_set.sta_pass), data, len, id);
-        reboot = true;
-        break;
-    case SET_AP_SSID:
-        r = set_str(s_set.ap_ssid, sizeof(s_set.ap_ssid), data, len, id);
-        reboot = true;
-        break;
-    case SET_AP_PASSWORD:
-        r = (len == 0 || len >= 8) ? set_str(s_set.ap_pass, sizeof(s_set.ap_pass), data, len, id) : CALIB_ERR_ARG;
-        reboot = true;
-        break;
-    case SET_WIFI_MODE:
-        if (!is_uint || v > NET_WIFI_MODE_STA) { r = CALIB_ERR_ARG; break; }
-        s_set.wifi_mode = (uint8_t)v;
-        cfg_set_uint(CFG_STORE_SETTINGS, id, v, 1);
-        reboot = true;
-        break;
-    case SET_AP_CHANNEL:
-        if (!is_uint || v < 1 || v > 13) { r = CALIB_ERR_ARG; break; }
-        s_set.ap_channel = (uint8_t)v;
-        cfg_set_uint(CFG_STORE_SETTINGS, id, v, 1);
         reboot = true;
         break;
     case SET_MAX_CURRENT_MA:
@@ -323,6 +295,7 @@ int settings_set(uint8_t id, const uint8_t *data, uint8_t len, bool *reboot_requ
     if (reboot_required) *reboot_required = (r == CALIB_OK) && reboot;
     return r;
 }
+#endif /* ENABLE_DEBUG_HOST */
 
 int settings_set_run_config(uint8_t run_mode, uint8_t algorithm, uint8_t pattern, uint8_t brightness)
 {
@@ -345,6 +318,7 @@ int settings_set_run_config(uint8_t run_mode, uint8_t algorithm, uint8_t pattern
     return r;
 }
 
+#ifdef ENABLE_DEBUG_HOST
 static size_t put_tlv(uint8_t *out, size_t cap, size_t off, uint8_t id, uint8_t type, const void *d, uint8_t len)
 {
     if (off + 3u + len > cap) return off;
@@ -370,12 +344,8 @@ size_t settings_serialize(uint8_t *out, size_t cap)
 {
     size_t o = 0;
     o = put_str(out, cap, o, SET_DEVICE_NAME, s_set.device_name);
-    o = put_uint(out, cap, o, SET_WIFI_MODE, s_set.wifi_mode, 1);
     o = put_str(out, cap, o, SET_STA_SSID, s_set.sta_ssid);
     o = put_str(out, cap, o, SET_STA_PASSWORD, s_set.sta_pass);
-    o = put_str(out, cap, o, SET_AP_SSID, s_set.ap_ssid);
-    o = put_str(out, cap, o, SET_AP_PASSWORD, s_set.ap_pass);
-    o = put_uint(out, cap, o, SET_AP_CHANNEL, s_set.ap_channel, 1);
     o = put_uint(out, cap, o, SET_MAX_CURRENT_MA, s_set.max_current_ma, 2);
     o = put_uint(out, cap, o, SET_NUM_LEDS, s_set.num_leds, 2);
     o = put_uint(out, cap, o, SET_RUN_MODE, s_set.run_mode, 1);
@@ -400,19 +370,15 @@ int settings_factory_reset(void)
     }
     return CALIB_OK;
 }
+#endif /* ENABLE_DEBUG_HOST */
 
 void settings_net_config(net_config_t *nc)
 {
     _Static_assert(sizeof(nc->sta_ssid) == sizeof(s_set.sta_ssid) && sizeof(nc->sta_pass) == sizeof(s_set.sta_pass) &&
-                   sizeof(nc->ap_ssid) == sizeof(s_set.ap_ssid) && sizeof(nc->ap_pass) == sizeof(s_set.ap_pass) &&
                    sizeof(nc->device_name) == sizeof(s_set.device_name), "settings / net_config size mismatch");
     memset(nc, 0, sizeof(*nc));
-    nc->wifi_mode = s_set.wifi_mode;
     memcpy(nc->sta_ssid, s_set.sta_ssid, sizeof(nc->sta_ssid));
     memcpy(nc->sta_pass, s_set.sta_pass, sizeof(nc->sta_pass));
-    memcpy(nc->ap_ssid, s_set.ap_ssid, sizeof(nc->ap_ssid));
-    memcpy(nc->ap_pass, s_set.ap_pass, sizeof(nc->ap_pass));
-    nc->ap_channel = s_set.ap_channel;
     memcpy(nc->device_name, s_set.device_name, sizeof(nc->device_name));
 }
 

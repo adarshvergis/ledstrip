@@ -1,6 +1,6 @@
 /**
  * @file network.c
- * @brief WiFi management, TCP frame server and UDP discovery responder.
+ * @brief WiFi station, TCP frame server, UDP live stream and UDP discovery responder.
  */
 #include "network.h"
 
@@ -24,60 +24,45 @@
 
 static const char *TAG = "net";
 
+/* live stream datagram: header + payload (fixed fields, bands, LED colours) */
+#define NET_STREAM_MAX_PAYLOAD  (64u + 2u * 32u + 3u * LED_MAX_COUNT)
+
 static net_config_t     s_cfg;
 static net_handler_t    s_handler;
 static net_post_send_t  s_post_send;
+static net_stream_fill_t s_stream_fill;
 static volatile net_state_t s_state = NET_STATE_OFF;
 static esp_netif_t     *s_netif_sta;
-static esp_netif_t     *s_netif_ap;
 static char             s_ip[16];
 static char             s_mac[18];
 static volatile bool    s_client;
-static bool             s_sta_wanted;
-static bool             s_ap_fallback;
-static esp_timer_handle_t s_sta_timer;
+static esp_timer_handle_t s_retry_timer;
+static uint32_t         s_retry_ms = NET_STA_RETRY_MIN_MS;
 
 /* frame buffers (static: keep the task stack small) */
 static uint8_t s_rx[NET_HEADER_SIZE + NET_MAX_PAYLOAD];
 static uint8_t s_tx[NET_HEADER_SIZE + NET_MAX_PAYLOAD];
 
+/* live stream state, owned by the server task */
+static struct {
+    bool               active;
+    uint8_t            cmd;
+    uint16_t           seq;
+    int64_t            period_us;
+    int64_t            next_us;
+    struct sockaddr_in dst;
+    struct in_addr     peer;            /* address of the connected host */
+    int                sock;
+    uint8_t            buf[NET_HEADER_SIZE + NET_STREAM_MAX_PAYLOAD];
+} s_stream = {.sock = -1};
+
 /* ========================================================================== */
-/*  WiFi                                                                      */
+/*  WiFi (station only)                                                       */
 /* ========================================================================== */
 
-static void update_ip_from(esp_netif_t *netif)
+static void retry_timer_cb(void *arg)
 {
-    esp_netif_ip_info_t ip;
-    if (netif && esp_netif_get_ip_info(netif, &ip) == ESP_OK && ip.ip.addr != 0) {
-        snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&ip.ip));
-    }
-}
-
-static void build_ap_config(wifi_config_t *wc);
-
-static void start_ap_fallback(void)
-{
-    if (s_ap_fallback) return;
-    s_ap_fallback = true;
-    ESP_LOGW(TAG, "station connect timeout -> enabling soft-AP");
-    err_report(ERR_WIFI_CONNECT);
-    esp_wifi_set_mode(WIFI_MODE_APSTA);
-    wifi_config_t ap;
-    build_ap_config(&ap);                   /* AP config is only accepted once AP is enabled */
-    esp_wifi_set_config(WIFI_IF_AP, &ap);
-    s_state = NET_STATE_AP;
-    update_ip_from(s_netif_ap);
-}
-
-static void sta_timer_cb(void *arg)
-{
-    if (s_state == NET_STATE_STA) return;
-    if (!s_ap_fallback && s_cfg.wifi_mode == NET_WIFI_MODE_AUTO) {
-        start_ap_fallback();
-    }
-    /* keep retrying the station in the background */
-    esp_wifi_connect();
-    esp_timer_start_once(s_sta_timer, (uint64_t)NET_STA_RETRY_PERIOD_MS * 1000u);
+    if (s_state != NET_STATE_STA) esp_wifi_connect();
 }
 
 static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -88,22 +73,18 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
             esp_wifi_connect();
             break;
         case WIFI_EVENT_STA_DISCONNECTED:
-            if (s_state == NET_STATE_STA) {
-                ESP_LOGW(TAG, "station disconnected");
-                s_state = s_ap_fallback ? NET_STATE_AP : NET_STATE_STA_CONNECTING;
-                if (s_ap_fallback) update_ip_from(s_netif_ap); else s_ip[0] = '\0';
-                esp_timer_stop(s_sta_timer);
-                esp_timer_start_once(s_sta_timer, (uint64_t)NET_STA_CONNECT_TIMEOUT_MS * 1000u);
-            }
-            if (!s_ap_fallback) {
-                vTaskDelay(pdMS_TO_TICKS(500));
-                esp_wifi_connect();
-            }
-            break;
-        case WIFI_EVENT_AP_START:
-            if (s_state != NET_STATE_STA) {
-                update_ip_from(s_netif_ap);
-                if (!s_sta_wanted || s_ap_fallback) s_state = NET_STATE_AP;
+            if (s_state == NET_STATE_STA) ESP_LOGW(TAG, "station disconnected");
+            s_state = NET_STATE_STA_CONNECTING;
+            s_ip[0] = '\0';
+            /* back-off 1 s -> 10 s; a persistent failure is shown as a warning */
+            esp_timer_stop(s_retry_timer);
+            esp_timer_start_once(s_retry_timer, (uint64_t)s_retry_ms * 1000u);
+            if (s_retry_ms < NET_STA_RETRY_MAX_MS) {
+                s_retry_ms *= 2u;
+                if (s_retry_ms >= NET_STA_RETRY_MAX_MS) {
+                    s_retry_ms = NET_STA_RETRY_MAX_MS;
+                    err_report(ERR_WIFI_CONNECT);
+                }
             }
             break;
         default:
@@ -113,7 +94,8 @@ static void wifi_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&e->ip_info.ip));
         s_state = NET_STATE_STA;
-        esp_timer_stop(s_sta_timer);
+        s_retry_ms = NET_STA_RETRY_MIN_MS;
+        esp_timer_stop(s_retry_timer);
         err_clear(ERR_WIFI_CONNECT);
         ESP_LOGI(TAG, "station connected, ip %s", s_ip);
     }
@@ -124,27 +106,6 @@ static void copy_field(uint8_t *dst, size_t cap, const char *src)
 {
     size_t n = strnlen(src, cap);
     memcpy(dst, src, n);
-}
-
-static void build_ap_config(wifi_config_t *wc)
-{
-    memset(wc, 0, sizeof(*wc));
-    uint8_t mac[6];
-    esp_read_mac(mac, ESP_MAC_WIFI_SOFTAP);
-    if (s_cfg.ap_ssid[0]) {
-        copy_field(wc->ap.ssid, sizeof(wc->ap.ssid), s_cfg.ap_ssid);
-    } else {
-        snprintf((char *)wc->ap.ssid, sizeof(wc->ap.ssid), NET_DEFAULT_AP_SSID_PREFIX "%02X%02X", mac[4], mac[5]);
-    }
-    wc->ap.ssid_len = (uint8_t)strlen((char *)wc->ap.ssid);
-    wc->ap.channel = (s_cfg.ap_channel >= 1 && s_cfg.ap_channel <= 13) ? s_cfg.ap_channel : NET_DEFAULT_AP_CHANNEL;
-    wc->ap.max_connection = NET_AP_MAX_CLIENTS;
-    if (strlen(s_cfg.ap_pass) >= 8) {
-        copy_field(wc->ap.password, sizeof(wc->ap.password), s_cfg.ap_pass);
-        wc->ap.authmode = WIFI_AUTH_WPA2_PSK;
-    } else {
-        wc->ap.authmode = WIFI_AUTH_OPEN;
-    }
 }
 
 static int wifi_start(void)
@@ -161,7 +122,6 @@ static int wifi_start(void)
     if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return HW_ERR_STATE;
 
     s_netif_sta = esp_netif_create_default_wifi_sta();
-    s_netif_ap = esp_netif_create_default_wifi_ap();
     esp_netif_set_hostname(s_netif_sta, s_cfg.device_name);
 
     wifi_init_config_t ic = WIFI_INIT_CONFIG_DEFAULT();
@@ -172,39 +132,91 @@ static int wifi_start(void)
     esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event, NULL, NULL);
     esp_event_handler_instance_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event, NULL, NULL);
 
-    esp_timer_create_args_t ta = {.callback = sta_timer_cb, .name = "sta_to"};
-    esp_timer_create(&ta, &s_sta_timer);
+    esp_timer_create_args_t ta = {.callback = retry_timer_cb, .name = "sta_retry"};
+    esp_timer_create(&ta, &s_retry_timer);
 
     uint8_t mac[6];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     snprintf(s_mac, sizeof(s_mac), "%02x:%02x:%02x:%02x:%02x:%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    s_sta_wanted = (s_cfg.wifi_mode == NET_WIFI_MODE_STA) || (s_cfg.wifi_mode == NET_WIFI_MODE_AUTO && s_cfg.sta_ssid[0]);
+    wifi_config_t sta;
+    memset(&sta, 0, sizeof(sta));
+    copy_field(sta.sta.ssid, sizeof(sta.sta.ssid), s_cfg.sta_ssid);
+    copy_field(sta.sta.password, sizeof(sta.sta.password), s_cfg.sta_pass);
+    sta.sta.threshold.authmode = s_cfg.sta_pass[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
+    esp_wifi_set_mode(WIFI_MODE_STA);
+    /* 20 MHz: ~3 dB more link margin than HT40; the host link needs < 20 kB/s */
+    esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20);
+    esp_wifi_set_config(WIFI_IF_STA, &sta);
+    s_state = NET_STATE_STA_CONNECTING;
+    ESP_LOGI(TAG, "connecting to '%s'", s_cfg.sta_ssid);
 
-    if (s_sta_wanted) {
-        wifi_config_t sta;
-        memset(&sta, 0, sizeof(sta));
-        copy_field(sta.sta.ssid, sizeof(sta.sta.ssid), s_cfg.sta_ssid);
-        copy_field(sta.sta.password, sizeof(sta.sta.password), s_cfg.sta_pass);
-        sta.sta.threshold.authmode = s_cfg.sta_pass[0] ? WIFI_AUTH_WPA_PSK : WIFI_AUTH_OPEN;
-        esp_wifi_set_mode(WIFI_MODE_STA);
-        esp_wifi_set_config(WIFI_IF_STA, &sta);
-        s_state = NET_STATE_STA_CONNECTING;
-        ESP_LOGI(TAG, "connecting to '%s'", s_cfg.sta_ssid);
-    } else {
-        wifi_config_t ap;
-        build_ap_config(&ap);
-        esp_wifi_set_mode(WIFI_MODE_AP);
-        esp_wifi_set_config(WIFI_IF_AP, &ap);
-        ESP_LOGI(TAG, "soft-AP '%s'", (char *)ap.ap.ssid);
-    }
     if (esp_wifi_start() != ESP_OK) return HW_ERR_STATE;
     esp_wifi_set_ps(WIFI_PS_NONE);          /* lowest latency for the host link */
-
-    if (s_sta_wanted) {
-        esp_timer_start_once(s_sta_timer, (uint64_t)NET_STA_CONNECT_TIMEOUT_MS * 1000u);
-    }
     return HW_OK;
+}
+
+/* ========================================================================== */
+/*  UDP live stream                                                           */
+/* ========================================================================== */
+
+void net_stream_set(uint16_t udp_port, uint8_t rate_hz, uint8_t stream_cmd)
+{
+    if (rate_hz == 0 || udp_port == 0) {
+        s_stream.active = false;
+        return;
+    }
+    if (rate_hz > NET_LIVE_MAX_HZ) rate_hz = NET_LIVE_MAX_HZ;
+    s_stream.cmd = stream_cmd;
+    s_stream.period_us = 1000000 / rate_hz;
+    s_stream.next_us = esp_timer_get_time();
+    s_stream.dst.sin_family = AF_INET;
+    s_stream.dst.sin_port = htons(udp_port);
+    s_stream.dst.sin_addr = s_stream.peer;
+    s_stream.active = true;
+}
+
+static void put_header(uint8_t *f, uint8_t cmd, uint8_t status, uint16_t seq, uint16_t len)
+{
+    f[0] = (uint8_t)NET_FRAME_MAGIC;
+    f[1] = (uint8_t)(NET_FRAME_MAGIC >> 8);
+    f[2] = cmd;
+    f[3] = status;
+    f[4] = (uint8_t)seq;
+    f[5] = (uint8_t)(seq >> 8);
+    f[6] = (uint8_t)len;
+    f[7] = (uint8_t)(len >> 8);
+}
+
+static void stream_send(void)
+{
+    if (s_stream.sock < 0) {
+        s_stream.sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+        if (s_stream.sock < 0) return;
+    }
+    uint16_t n = s_stream_fill(s_stream.buf + NET_HEADER_SIZE, NET_STREAM_MAX_PAYLOAD);
+    put_header(s_stream.buf, s_stream.cmd, 0, s_stream.seq++, n);
+    /* never wait: a frame that does not fit the WiFi queue is dropped, the next one is newer */
+    sendto(s_stream.sock, s_stream.buf, NET_HEADER_SIZE + n, MSG_DONTWAIT,
+           (struct sockaddr *)&s_stream.dst, sizeof(s_stream.dst));
+}
+
+/* Send due stream frames. Returns the time until the next frame [us] (or @p idle_us). */
+static int64_t stream_service(int64_t last_rx_us, int64_t idle_us)
+{
+    if (!s_stream.active) return idle_us;
+    int64_t now = esp_timer_get_time();
+    if (now - last_rx_us > (int64_t)NET_LIVE_LEASE_MS * 1000) {
+        ESP_LOGI(TAG, "live stream lease expired");
+        s_stream.active = false;
+        return idle_us;
+    }
+    if (now >= s_stream.next_us) {
+        stream_send();
+        s_stream.next_us += s_stream.period_us;
+        if (s_stream.next_us <= now) s_stream.next_us = now + s_stream.period_us;   /* no burst after a stall */
+    }
+    return s_stream.next_us - now;
 }
 
 /* ========================================================================== */
@@ -251,14 +263,7 @@ static bool serve_frame(int c)
     uint8_t status = s_handler(cmd, s_rx + NET_HEADER_SIZE, len, s_tx + NET_HEADER_SIZE, NET_MAX_PAYLOAD, &resp_len);
     if (resp_len > NET_MAX_PAYLOAD) resp_len = NET_MAX_PAYLOAD;
 
-    s_tx[0] = (uint8_t)NET_FRAME_MAGIC;
-    s_tx[1] = (uint8_t)(NET_FRAME_MAGIC >> 8);
-    s_tx[2] = cmd | NET_RESP_FLAG;
-    s_tx[3] = status;
-    s_tx[4] = (uint8_t)seq;
-    s_tx[5] = (uint8_t)(seq >> 8);
-    s_tx[6] = (uint8_t)resp_len;
-    s_tx[7] = (uint8_t)(resp_len >> 8);
+    put_header(s_tx, cmd | NET_RESP_FLAG, status, seq, resp_len);
     bool ok = send_all(c, s_tx, NET_HEADER_SIZE + resp_len);
     if (s_post_send) s_post_send(cmd);
     return ok;
@@ -272,6 +277,7 @@ static void close_client(int *c)
         *c = -1;
     }
     s_client = false;
+    s_stream.active = false;
 }
 
 static void server_task(void *arg)
@@ -300,6 +306,10 @@ static void server_task(void *arg)
             }
         }
 
+        /* select() wakes up for the next live stream frame or after 1 s */
+        int64_t wait_us = stream_service(last_rx_us, 1000000);
+        if (wait_us < 0) wait_us = 0;
+
         fd_set rd;
         FD_ZERO(&rd);
         FD_SET(ls, &rd);
@@ -308,12 +318,13 @@ static void server_task(void *arg)
             FD_SET(c, &rd);
             if (c > maxfd) maxfd = c;
         }
-        struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
+        struct timeval tv = {.tv_sec = (time_t)(wait_us / 1000000), .tv_usec = (suseconds_t)(wait_us % 1000000)};
         int r = select(maxfd + 1, &rd, NULL, NULL, &tv);
         if (r < 0) {
             vTaskDelay(pdMS_TO_TICKS(100));
             continue;
         }
+        if (r == 0) continue;
 
         if (FD_ISSET(ls, &rd)) {
             struct sockaddr_in peer;
@@ -331,6 +342,7 @@ static void server_task(void *arg)
                 setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, &rto, sizeof(rto));
                 setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, &rto, sizeof(rto));
                 s_client = true;
+                s_stream.peer = peer.sin_addr;
                 last_rx_us = esp_timer_get_time();
                 ESP_LOGI(TAG, "host connected from %s", inet_ntoa(peer.sin_addr));
             }
@@ -401,7 +413,7 @@ static void discovery_task(void *arg)
         }
 
         int64_t now = esp_timer_get_time();
-        if (now >= next_beacon && (s_state == NET_STATE_STA || s_state == NET_STATE_AP)) {
+        if (now >= next_beacon && s_state == NET_STATE_STA) {
             next_beacon = now + (int64_t)NET_BEACON_PERIOD_MS * 1000;
             int n = build_beacon(line, sizeof(line));
             struct sockaddr_in bc = {.sin_family = AF_INET, .sin_port = htons(NET_UDP_DISCOVERY_PORT),
@@ -413,14 +425,20 @@ static void discovery_task(void *arg)
 
 /* ========================================================================== */
 
-int net_start(const net_config_t *cfg, net_handler_t handler, net_post_send_t post_send)
+int net_start(const net_config_t *cfg, net_handler_t handler, net_post_send_t post_send,
+              net_stream_fill_t stream_fill)
 {
-    if (!cfg || !handler) return HW_ERR_ARG;
+    if (!cfg || !handler || !stream_fill) return HW_ERR_ARG;
     s_cfg = *cfg;
     s_handler = handler;
     s_post_send = post_send;
+    s_stream_fill = stream_fill;
     if (!s_cfg.device_name[0]) {
         strncpy(s_cfg.device_name, NET_DEFAULT_DEVICE_NAME, sizeof(s_cfg.device_name) - 1);
+    }
+    if (!s_cfg.sta_ssid[0]) {
+        ESP_LOGW(TAG, "no WiFi credentials stored - network off");
+        return HW_ERR_STATE;
     }
 
     if (wifi_start() != HW_OK) {

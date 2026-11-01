@@ -1,145 +1,130 @@
 # LED Strip Host Software
 
-Calibration, settings, live view, CLI, diagnostics and firmware update for the
-music-reactive LED strip. A small Python backend (asyncio + aiohttp) talks to the
-device over the binary protocol in [`Docs/protocol.md`](../Docs/protocol.md)
-(TCP 4210 / UDP 4211) and serves a single-page web UI at <http://127.0.0.1:8080>.
-The UI is plain HTML/CSS/JS with no build step and no CDN, so it works offline.
+Desktop app for live view, calibration and firmware update of the music-reactive LED
+strip, plus settings, errors, diagnostics and CLI for debug firmware. It is one Python
+file using only the standard library (tkinter, socket, threading), and it talks to the
+device over the binary protocol in [`Docs/protocol.md`](../Docs/protocol.md): TCP 4210
+for commands, a UDP live stream, and UDP 4211 for discovery.
+
+The device joins your home WiFi in station mode, so the PC stays on its normal network
+and keeps internet access. There is no device access point to join.
 
 ```
 Host/
-  ledhost/            Python package
-    protocol.py       frame encode/decode, enums, all command payloads, region image format
-    device.py         async TCP client (one persistent connection, lock-serialised, auto-reconnect), UDP discovery
-    server.py         aiohttp REST/JSON API + static file serving, firmware upload job
-    __main__.py       `python -m ledhost`
-  static/             index.html, app.js, style.css (the web UI)
+  ledapp.py           the desktop app
+  ledhost/
+    protocol.py       frame encode/decode, enums, all command payloads, region image formats
   tools/
     sim_device.py     device simulator (protocol server side) for testing without hardware
-    api_test.py       end-to-end REST test against the simulator
-  requirements.txt    aiohttp
+    proto_test.py     end-to-end protocol test against the simulator
 ```
 
-## Setup and run
+## Run
+
+You need Python 3.9 or newer with tkinter. The python.org installer for Windows
+includes it. There is no virtual environment and nothing to install.
 
 ```sh
-Scripts/host_setup.sh                  # or Scripts\host_setup.bat  - creates Host/.venv, installs aiohttp
-Scripts/host_run.sh --device 192.168.4.1   # or Scripts\host_run.bat
+Scripts/host_run.sh [--device 192.168.1.50] [--debug]     # or Scripts\host_run.bat, or python Host/ledapp.py
 ```
 
-Then open <http://127.0.0.1:8080>. Options for `python -m ledhost` (run from `Host/`):
+* **Device:** without `--device` the app reconnects to the last device. Otherwise
+  **Scan** broadcasts `LEDSTRIP_DISCOVER` and connects to the first device that
+  answers; you can also type the device IP.
+* **Host settings:** the last device, live rate and debug mode are saved in
+  `Host/ledapp_settings.json`, which is git-ignored.
+* **Windows firewall:** on first start Windows may ask whether Python may use the
+  network. Allow it for private networks, otherwise the UDP live stream and discovery
+  replies are blocked.
 
-| Option | Default | Meaning |
-|---|---|---|
-| `--host` | `127.0.0.1` | interface for the web UI (use `0.0.0.0` to open it from a phone on the LAN) |
-| `--port` | `8080` | web UI port |
-| `--device ip[:port]` | host setting `default_device_ip` | device to use at start-up |
-| `-v` | | debug logging |
+### First-time WiFi setup
 
-Without `--device`, use the Main tab: **Scan** (UDP broadcast `LEDSTRIP_DISCOVER` +
-listening for the 3 s beacons) or type an IP. In soft-AP mode the device is
-`192.168.4.1`.
+The device needs your WiFi credentials once:
 
-Host-side settings (live poll rate, default device IP, auto-connect) are stored in
-`Host/host_settings.json` (git-ignored).
+* **Release firmware:** write them over the USB-C cable. This replaces all stored
+  settings; calibration and firmware are kept.
+  `Scripts/flash_settings.sh COM5 --ssid HomeWiFi --password secret`
+* **Debug firmware:** you can also set them in **Debug > Settings**, then reboot the
+  device. The settings partition survives OTA updates, so you can flash a debug
+  build, set the WiFi from the host, and then OTA the release image.
+
+## Views
+
+* **Main**
+  * Device info, plus run mode, algorithm, pattern and brightness (0-254).
+  * Live view: the LED strip in real colours, level, spectral centroid, BPM with a
+    beat flash, band bars and the device mode.
+  * The top bar shows live frames per second, jitter and lost frames.
+  * **View > Live rate** selects 30, 60 or 100 Hz.
+* **Calibration**
+  * Enter or exit calibration mode, and filter the stages by algorithm.
+  * Parameter editors are generated from the stage schema: slider and spin box for
+    FLOAT/INT, check box for BOOL, drop-down for ENUM.
+  * Changes are sent live. Slider moves are coalesced so that only the newest value
+    per parameter goes out, about every 60 ms. The value the device applied, which
+    may be clamped, is shown.
+  * Save to flash, reload, reset a stage or all stages, and export or import JSON.
+* **Firmware**
+  * Upload an application image (must start with `0xE9`) or a calibration region
+    image, with progress and an abort button.
+  * After an application image the app sends REBOOT and reconnects on its own.
+  * Download the current calibration image.
+* **Debug** (View > Debug mode)
+  * Shown only when the connected device is debug firmware (build flag
+    `ENABLE_DEBUG_HOST`).
+  * **Settings:** device name, WiFi SSID and password, current limit, LED count and
+    colour order, with reboot and factory reset.
+  * **Errors**, **Diagnostics**, **CLI** with history, and a request **Log** with
+    per-request timing.
+
+## How it works (latency)
+
+* **Live view is pushed, not polled.** After connecting, the app sends `LIVE_SUBSCRIBE`
+  with its UDP port, and the firmware's comm task sends one datagram per period with
+  the newest snapshot. There are no request round trips, and no HTTP, JSON or hex
+  encoding.
+  * Lost datagrams are not resent. A late datagram is dropped by sequence number, so
+    the view never steps backwards.
+  * The UI thread draws only the newest frame every ~15 ms and changes only the LEDs
+    whose colour changed.
+* **Threads:**
+  * The **UI thread** never blocks on I/O.
+  * A **worker thread** owns the TCP link. It sends requests in order, sends a PING
+    once a second (which also renews the 3 s live-stream lease) and reconnects every
+    2 s after a failure.
+  * A **live thread** receives the UDP stream.
+* **Diagnostics are read once per connection.** On every connect or reconnect (and
+  so after every device reboot) the app reads info, algorithms, stage schemas and
+  parameters. On debug firmware it also reads errors, settings and self
+  diagnostics. Nothing is polled after that; the Debug tab has Refresh buttons.
+* **Jitter figure:** the device timestamps each frame (`t_ms`). The clocks are not
+  synchronised, so the "jitter" figure is the average delay above the fastest frame
+  seen.
 
 ## Testing without hardware
 
 ```sh
-python Host/tools/sim_device.py            # TCP 127.0.0.1:4210 + UDP discovery on 127.0.0.1:4211
-cd Host && python -m ledhost --device 127.0.0.1
-python Host/tools/api_test.py              # 71 end-to-end checks; expects a freshly started simulator
+python Host/tools/sim_device.py               # debug build (--flags 15); TCP 127.0.0.1:4210, UDP 4211
+python Host/tools/sim_device.py --flags 0     # release build: debug-only commands -> ERR_UNKNOWN_CMD
+python Host/ledapp.py --device 127.0.0.1
+python Host/tools/proto_test.py               # starts its own simulator on 14210/14211; 29 checks
 ```
 
-The simulator has 4 algorithms built from 5 stages (FLOAT/INT/BOOL/ENUM params),
-5 patterns, an animated 60-LED strip, settings, errors, a CLI (`help`, `echo`, ...),
-diagnostics and a fake firmware update with real CRC/offset checks. `--flags 1`
-hides the CLI and diagnostics tabs; `--fw-delay` slows uploads down.
+The simulator has:
 
-## UI tabs
+* 4 algorithms built from 5 stages, with FLOAT/INT/BOOL/ENUM parameters, and 5 patterns.
+* An animated 60-LED strip, served over the UDP live stream.
+* Settings, errors, a CLI (`help`, `echo`, ...) and diagnostics.
+* A fake firmware update with real CRC and offset checks. `--fw-delay` slows uploads
+  down.
 
-* **Main** - discovery and manual connect, device info, run mode / algorithm /
-  pattern / brightness, live view (LED strip in real colours, level, BPM with beat
-  flash, band bars, spectral centroid; polled at the host poll rate, default 15 Hz),
-  error list with clear.
-* **Calibration** - enter/exit calibration mode; per-algorithm pipeline view (or all
-  stages); editors generated from the stage schema (slider + number for FLOAT/INT,
-  toggle for BOOL, dropdown for ENUM); changes are applied live (100 ms debounce) and
-  the value returned by the device is shown (clamping is highlighted); save to flash,
-  reload, reset stage / all, export/import JSON. "Unsaved changes" follows `calib_dirty`.
-* **Settings** - device settings (name, Wi-Fi, AP, current limit, LED count, colour
-  order) with reboot-required notice, reboot, factory reset (in-page confirmation),
-  export/import of all device settings, host settings.
-* **Admin** - CLI (only if build flag `ENABLE_DEBUG_CLI`), firmware update (APP or
-  CALIB target, progress, abort) and calibration image download, self diagnostics
-  (only if `ENABLE_SELF_DIAGNOSTICS`; auto refresh 1 s, reset).
-
-## Calibration image tool
+## Image tools
 
 ```sh
-python Scripts/make_calib_image.py params.json -o calib.bin [--sequence 1]
+python Scripts/make_calib_image.py params.json -o calib.bin [--sequence 1]   # Calibration > Export works as input
 python Scripts/make_calib_image.py --decode calib.bin [-o params.json]
+python Scripts/make_settings_image.py --ssid HomeWiFi --password secret -o settings.bin   # used by flash_settings.sh
 ```
 
-`params.json` is `{"params": [{"stage": 0, "param": 1, "value": 40.0}, ...]}`; a
-file from **Calibration > Export JSON** works as-is. Upload the image in
-**Admin > Firmware update** with target *Calibration region*.
-
-## REST API
-
-All endpoints return JSON. Errors are `{"error": "...", "status": "<NAME>", "code": <int|null>}`;
-`status` is the device status name (`ERR_WRONG_MODE`, ...), `TRANSPORT` for
-connection problems or `HOST` for host-side validation.
-
-HTTP mapping: 400 bad argument / length / validation, 409 wrong mode or busy,
-422 CRC, 501 unknown command / not supported, 500 flash/internal, 502 device
-unreachable, 503 no device selected, 504 device timeout.
-
-| Method | Path | Body / query | Result |
-|---|---|---|---|
-| GET | `/api/status` | | `{device, connected, info, error, fw_job}` (does GET_INFO) |
-| POST | `/api/connect` | `{ip: "a.b.c.d[:port]"}` | `{device, info}` |
-| POST | `/api/disconnect` | | |
-| GET | `/api/discover` | `?timeout=1.5` | `{devices: [{name, ip, port, fw, mac, ...}], beacon_listener}` |
-| GET | `/api/info` | | decoded GET_INFO + `has_cli`, `has_diag`, mode names |
-| POST | `/api/reboot` | | |
-| POST | `/api/device_mode` | `{mode: 0\|1\|"main"\|"calibration"}` | |
-| POST | `/api/run_config` | `{run_mode?, algorithm?, pattern?, brightness?}` | omitted = unchanged |
-| GET | `/api/live` | | `{level, bpm, beat_count, centroid, num_leds, bands[], leds: "rrggbb..."}` |
-| GET | `/api/errors` | | `{errors: [{code, name, severity, severity_name, occurrences, last_uptime_ms}]}` |
-| POST | `/api/errors/clear` | | |
-| GET | `/api/algorithms` | | `{algorithms: [{id, name, description, stage_ids}]}` |
-| GET | `/api/stages` | | `{stages: [ids]}` |
-| GET | `/api/stages/{id}/schema` | | `{id, name, description, params: [{id, type, type_name, min, max, default, step, name, unit, options}]}` |
-| GET | `/api/stages/{id}/params` | | `{stage, values: []}` |
-| GET | `/api/calib` | | algorithms + every stage schema with `values` + `device_mode`, `calib_dirty`, `active_algorithm` |
-| POST | `/api/params` | `{stage, param, value}` | `{requested, applied}` |
-| POST | `/api/params/bulk` | `{params: [{stage, param, value}]}` | `{applied, failed, results}` |
-| GET | `/api/params/export` | | JSON file download |
-| POST | `/api/params/save` / `reload` | | |
-| POST | `/api/params/reset` | `{stage?}` (omit = all) | |
-| GET | `/api/settings` | | `{settings: {name: value}, definitions}` |
-| POST | `/api/settings` | `{settings: {name: value, ...}}` | `{changed: [names], reboot_required}` (unchanged values skipped) |
-| POST | `/api/settings/factory_reset` | | |
-| GET | `/api/settings/export` | | JSON file download |
-| GET/POST | `/api/host_settings` | `{poll_rate_hz?, default_device_ip?, auto_connect?}` | host settings |
-| POST | `/api/fw/upload` | raw file body; `?target=app\|calib&name=file.bin` | starts background job |
-| GET | `/api/fw/status` | | `{state, target, total, sent, percent, message, elapsed_s, rate_bps}` |
-| POST | `/api/fw/abort` | | aborts the job (or sends FW_ABORT if none running) |
-| GET | `/api/calib_image` | | binary download (GET_CALIB_IMAGE) |
-| POST | `/api/cli` | `{cmd}` | `{output}` |
-| GET | `/api/diag` | | `{rows: [{group, name, value, unit}], raw}` |
-| POST | `/api/diag/reset` | | |
-
-## Implementation notes
-
-* The device serves one TCP client: the backend keeps a single connection and
-  serialises requests with an `asyncio.Lock`. Timeout is 3 s per request, 15 s for
-  FW_BEGIN / FW_DATA / FW_END / SAVE_PARAMS. Any transport error drops the
-  connection; the next request reconnects. Responses with a stale `seq` are skipped.
-* Firmware upload runs in the backend: FW_BEGIN (size + `zlib.crc32`), FW_DATA
-  chunks of `max_chunk`, FW_END, then REBOOT for APP images. On failure FW_ABORT is
-  sent. APP files must start with the ESP image magic `0xE9`; CALIB files are
-  checked against the region image format before anything is sent.
-* `brightness = 255` cannot be sent with SET_RUN_CONFIG (0xFF = unchanged), so
-  `/api/run_config` sends it as SET_SETTING id 13 instead.
+Upload a calibration image in **Firmware**, choosing *Calibration region image*. The
+settings image is written over USB at `0x3D8000` by `Scripts/flash_settings.sh`.
