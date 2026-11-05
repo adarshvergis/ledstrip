@@ -25,7 +25,7 @@ from typing import Any
 # Constants
 # ---------------------------------------------------------------------------
 
-PROTO_VERSION = 2
+PROTO_VERSION = 3
 TCP_PORT = 4210
 UDP_PORT = 4211
 
@@ -82,6 +82,8 @@ class Cmd(IntEnum):
 
 # cmd byte of the UDP live stream datagrams (payload = GET_LIVE response)
 LIVE_FRAME = Cmd.GET_LIVE | RESPONSE_FLAG
+SPEC_FLOOR_DB = -120          # live spectrum u8 v -> SPEC_FLOOR_DB + v / 2 dBFS
+TAP_END = 15                  # spectrum tap "after the last stage"; taps 0..14 = after stage id n
 
 
 class Status(IntEnum):
@@ -321,6 +323,8 @@ class LiveData:
     device_mode: int
     bands: list[int]
     leds: bytes          # R,G,B triplets
+    genre: int = 0       # genre index of the music stage's "genre" enum, 0 = none/unknown (v3)
+    spectra: dict[int, bytes] = field(default_factory=dict)   # tap id -> points, u8 SPEC_FLOOR_DB + v/2 dBFS (v3)
 
     _FIXED = struct.Struct("<IHHHHBBH")
 
@@ -334,18 +338,72 @@ class LiveData:
             raise ProtocolError("live payload truncated")
         bands = list(struct.unpack_from(f"<{nb}H", payload, off))
         off += nb * 2
-        return cls(t, level, bpm, beats, centroid, mode, bands, payload[off:off + nl * 3])
+        leds = payload[off:off + nl * 3]
+        off += nl * 3
+        genre, spectra = 0, {}
+        if len(payload) >= off + 2:
+            genre, count = payload[off], payload[off + 1]
+            off += 2
+            for _ in range(count):
+                if len(payload) < off + 2:
+                    raise ProtocolError("live spectrum truncated")
+                tap, n = payload[off], payload[off + 1]
+                pts = payload[off + 2:off + 2 + n]
+                if len(pts) != n:
+                    raise ProtocolError("live spectrum truncated")
+                spectra[tap] = bytes(pts)
+                off += 2 + n
+        return cls(t, level, bpm, beats, centroid, mode, bands, leds, genre, spectra)
+
+    def spectrum_db(self, tap: int) -> list[float]:
+        """Points of @tap in dBFS (empty if the frame has none). Layout: SpectrumLayout."""
+        return [SPEC_FLOOR_DB + v / 2 for v in self.spectra.get(tap, b"")]
 
     def encode(self) -> bytes:
         nl = len(self.leds) // 3
         out = self._FIXED.pack(self.t_ms & 0xFFFFFFFF, self.level, self.bpm_x10, self.beat_count,
                                self.centroid, len(self.bands), self.device_mode, nl)
-        return out + struct.pack(f"<{len(self.bands)}H", *self.bands) + bytes(self.leds)
+        out += struct.pack(f"<{len(self.bands)}H", *self.bands) + bytes(self.leds)
+        out += bytes([self.genre, len(self.spectra)])
+        for tap in sorted(self.spectra):
+            out += bytes([tap, len(self.spectra[tap])]) + bytes(self.spectra[tap])
+        return out
 
 
-def build_live_subscribe(udp_port: int, rate_hz: int) -> bytes:
-    """LIVE_SUBSCRIBE payload; rate 0 (or port 0) stops the stream."""
-    return struct.pack("<HBB", udp_port, rate_hz, 0)
+def build_live_subscribe(udp_port: int, rate_hz: int, taps: int = 0) -> bytes:
+    """LIVE_SUBSCRIBE payload; rate 0 (or port 0) stops the stream.
+
+    taps: spectrum taps, bit n = signal after stage id n, bit TAP_END = after the last stage.
+    Unrequested taps cost the device nothing (no copy, no FFT).
+    """
+    return struct.pack("<HBBH", udp_port, rate_hz, 0, taps & 0xFFFF)
+
+
+@dataclass
+class SpectrumLayout:
+    """LIVE_SUBSCRIBE response: rate, taps kept and the point -> FFT bin layout."""
+
+    rate_hz: int
+    taps: int
+    edges: list[int]          # point i covers FFT bins edges[i] .. edges[i+1]-1
+
+    @classmethod
+    def decode(cls, payload: bytes) -> "SpectrumLayout":
+        if len(payload) < 4:
+            raise ProtocolError("LIVE_SUBSCRIBE response truncated")
+        rate, taps, n = struct.unpack_from("<BHB", payload)
+        edges = list(payload[4:4 + n + 1])
+        if len(edges) != n + 1:
+            raise ProtocolError("LIVE_SUBSCRIBE layout truncated")
+        return cls(rate, taps, edges)
+
+    def encode(self) -> bytes:
+        return struct.pack("<BHB", self.rate_hz, self.taps, len(self.edges) - 1) + bytes(self.edges)
+
+    def freqs(self, sample_rate: int) -> list[float]:
+        """Centre frequency of each point (geometric mean of its first and last bin)."""
+        hz = sample_rate / (2 * (self.edges[-1] - 1))       # last edge = Nyquist bin + 1
+        return [hz * (a * (b - 1)) ** 0.5 for a, b in zip(self.edges, self.edges[1:])]
 
 
 @dataclass

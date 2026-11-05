@@ -7,13 +7,14 @@
 #include <string.h>
 #include "hw_common.h"
 #include "calibration.h"
+#include "spectrum_taps.h"
 
 #include "freertos/FreeRTOS.h"
 #include "esp_log.h"
 
 static const char *TAG = "pipeline";
 
-/* Every stage the firmware knows, indexed by stage id. */
+/* Every stage the firmware knows, indexed by stage id (NULL = retired id). */
 static const stage_def_t *const s_all_stages[STAGE_COUNT] = {
     [STAGE_FRONTEND]             = &g_stage_frontend,
     [STAGE_FILTER_A]             = &g_stage_filter_a,
@@ -22,10 +23,12 @@ static const stage_def_t *const s_all_stages[STAGE_COUNT] = {
     [STAGE_AGC]                  = &g_stage_agc,
     [STAGE_SPECTRUM]             = &g_stage_spectrum,
     [STAGE_BEAT]                 = &g_stage_beat,
-    [STAGE_RENDER_LEVEL]         = &g_stage_render_level,
     [STAGE_RENDER_BEAT_FLASH]    = &g_stage_render_beat_flash,
     [STAGE_RENDER_SPECTRUM]      = &g_stage_render_spectrum,
     [STAGE_RENDER_BEAT_SEGMENTS] = &g_stage_render_beat_segments,
+    [STAGE_MELODY]               = &g_stage_melody,
+    [STAGE_MUSIC]                = &g_stage_music,
+    [STAGE_RENDER_SHOW]          = &g_stage_render_show,
 };
 
 _Static_assert(STAGE_COUNT <= 32, "dirty mask is 32 bit");
@@ -140,6 +143,7 @@ void pipeline_process(audio_frame_t *f)
     }
 
     const algorithm_def_t *a = &g_algorithms[s_active];
+    const uint16_t taps = taps_mask();      /* live spectrum taps chosen by the host */
     capture(PIPELINE_CAPTURE_INPUT, f);
     for (uint8_t i = 0; i < a->num_stages; i++) {
         const stage_def_t *s = a->stages[i];
@@ -149,7 +153,9 @@ void pipeline_process(audio_frame_t *f)
         s_t_sum[i] += dt;
         if (dt > s_t_max[i]) s_t_max[i] = dt;
         capture((int8_t)i, f);
+        if (taps & (1u << s->id)) taps_capture(s->id, f->samples, f->n);
     }
+    if (taps & (1u << TAP_END)) taps_capture(TAP_END, f->samples, f->n);
     s_t_cnt++;
 }
 

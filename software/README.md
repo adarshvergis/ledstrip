@@ -14,6 +14,7 @@ software/
   ledapp.py           the desktop app
   ledhost/
     protocol.py       frame encode/decode, enums, all command payloads, region image formats
+    dsp.py            firmware biquad response (filter overlay), monotone cubic interpolation
   tools/
     sim_device.py     device simulator (protocol server side) for testing without hardware
     proto_test.py     end-to-end protocol test against the simulator
@@ -31,7 +32,8 @@ Scripts/software/host_run.sh [-device 192.168.1.50] [-debug]     # or Scripts\so
 * **Device:** without `--device` the app reconnects to the last device. Otherwise
   **Scan** broadcasts `LEDSTRIP_DISCOVER` and connects to the first device that
   answers; you can also type the device IP.
-* **Host settings:** the last device, live rate and debug mode are saved in
+* **Host settings:** the last device, live rate, debug mode and the overlay tick
+  boxes (`filter_overlay`, `processed_overlay`) are saved in
   `software/ledapp_settings.json`, which is git-ignored.
 * **Windows firewall:** on first start Windows may ask whether Python may use the
   network. Allow it for private networks, otherwise the UDP live stream and discovery
@@ -54,17 +56,35 @@ The UI is dark only. The top bar shows the connection state, the device address,
 Scan / Connect and the **Debug** toggle.
 
 * **Live**
-  * The LED strip as glowing dots in real colours. On narrow windows the strip wraps
-    into several rows. Dim LEDs are brightened on screen so they stay visible; the
-    strip itself is not affected.
+  * The LED strip as square LEDs in the colours sent to the strip, brightness and
+    power limit included (drawn linearly, so the brightness setting is visible). On
+    narrow windows the strip wraps into several rows.
   * The header shows the LED count, WiFi strength (bars and dBm, read at connect),
     live frames per second, jitter and lost frames, and the device mode when it is
     not MAIN.
-  * Tempo (BPM with a beat pulse), level and tone (spectral centroid) meters, and
-    spectrum bars with peak hold.
+  * Tempo (BPM with a beat pulse), the detected genre (when the algorithm has the
+    music stage; names come from the device's `genre` parameter), level and tone
+    (spectral centroid) meters.
+  * Continuous spectrum of the input (the device's tap after the front-end stage):
+    72 log-spaced points (single 62.5 Hz FFT bins up to ~3.9 kHz, grouped above)
+    interpolated with a monotone cubic on a log frequency axis (30 Hz - 8 kHz)
+    against a dBFS axis (-100..0), with a peak-hold trace. The curve starts at the
+    first point (62.5 Hz).
+  * **After processing** (tick box): adds the spectrum at the end of the pipeline
+    (green curve).
+  * **Filter overlay** (tick box): for each enabled filter stage of the running
+    algorithm, its measured output spectrum as a coloured curve plus its theoretical
+    response (dashed, own dB axis -36..+12 on the right) with a marker and label at
+    its frequency. Filter stages are recognised by their parameters (type,
+    frequency, q, gain); the response uses the same formulas as the firmware
+    (`ledhost/dsp.py`) and follows parameter changes.
+  * Unticked overlays are not requested from the device (no CPU or WiFi cost). The
+    app re-subscribes with the new tap set when a tick box, the algorithm or a
+    filter's on/off state changes.
   * **Controls:** source (Audio / Pattern), algorithm, pattern, brightness (0-254),
-    live view on/off and live rate (30, 60 or 100 Hz). Below about 700 px window
-    width the controls move under the live view.
+    live view on/off, live rate (30, 60 or 100 Hz) and the two overlay tick boxes.
+    Below about 700 px window width the controls move under the live view in two
+    columns; on short plots the legend and labels are hidden.
 * **Calibration**
   * Enter or exit calibration mode, and filter the stages by algorithm.
   * Parameter editors are generated from the stage schema: slider and spin box for
@@ -118,13 +138,15 @@ Scan / Connect and the **Debug** toggle.
 python software/tools/sim_device.py               # debug build (--flags 15); TCP 127.0.0.1:4210, UDP 4211
 python software/tools/sim_device.py --flags 0     # release build: debug-only commands -> ERR_UNKNOWN_CMD
 python software/ledapp.py --device 127.0.0.1
-python software/tools/proto_test.py               # starts its own simulator on 14210/14211; 29 checks
+python software/tools/proto_test.py               # starts its own simulator on 14210/14211; 37 checks
 ```
 
 The simulator has:
 
-* 4 algorithms built from 5 stages, with FLOAT/INT/BOOL/ENUM parameters, and 5 patterns.
-* An animated 60-LED strip, served over the UDP live stream.
+* 4 algorithms built from 8 stages (including Filter A / B and a Music stage with
+  the `genre` enum), with FLOAT/INT/BOOL/ENUM parameters, and 5 patterns.
+* An animated 60-LED strip, genre and tap spectra (input, after each filter, end),
+  served over the UDP live stream.
 * Settings, errors, a CLI (`help`, `echo`, ...) and diagnostics.
 * A fake firmware update with real CRC and offset checks. `--fw-delay` slows uploads
   down.

@@ -12,6 +12,7 @@
 #include "calibration.h"
 #include "mode_manager.h"
 #include "pipeline.h"
+#include "spectrum_taps.h"
 #include "light_control.h"
 #include "led_patterns.h"
 #include "config_manager.h"
@@ -134,11 +135,23 @@ static uint8_t cmd_get_info(wbuf_t *w)
     return ST_OK;
 }
 
-/* Live snapshot, shared by GET_LIVE and the UDP stream (both run in the network task). */
+/* True if the active algorithm contains stage @p id. */
+static bool algo_has_stage(uint8_t id)
+{
+    const algorithm_def_t *a = &g_algorithms[pipeline_active()];
+    for (uint8_t i = 0; i < a->num_stages; i++) {
+        if (a->stages[i]->id == id) return true;
+    }
+    return false;
+}
+
+/* Live snapshot, shared by GET_LIVE and the UDP stream (both run in the network task,
+ * so the static buffers are safe). The spectrum is converted to dB here, not in the
+ * real-time task. */
 static uint16_t live_fill(uint8_t *buf, uint16_t cap)
 {
     wbuf_t w = {.buf = buf, .cap = cap, .len = 0};
-    live_snapshot_t ls;
+    static live_snapshot_t ls;
     mode_get_live(&ls);
     static led_rgb_t px[LED_MAX_COUNT];
     uint16_t n = light_get_output(px, LED_MAX_COUNT);
@@ -152,6 +165,23 @@ static uint16_t live_fill(uint8_t *buf, uint16_t cap)
     w_u16(&w, n);
     for (int b = 0; b < AUDIO_NUM_BANDS; b++) w_u16(&w, ls.bands[b]);
     w_bytes(&w, px, (uint16_t)(n * 3u));
+
+    /* v3: detected genre (0 = no music stage running) and one spectrum per subscribed tap
+     * that has data (the FFTs run here, in the comm task, not in the real-time path) */
+    w_u8(&w, algo_has_stage(STAGE_MUSIC) ? ls.genre : 0);
+    uint16_t count_pos = w.len;
+    w_u8(&w, 0);
+    uint8_t nspec = 0;
+    const uint16_t mask = taps_mask();
+    static uint8_t pts[TAP_POINTS];
+    for (uint8_t t = 0; t <= TAP_END; t++) {
+        if (!(mask & (1u << t)) || !taps_spectrum(t, pts)) continue;
+        w_u8(&w, t);
+        w_u8(&w, (uint8_t)TAP_POINTS);
+        w_bytes(&w, pts, (uint16_t)TAP_POINTS);
+        nspec++;
+    }
+    if (count_pos < w.cap) buf[count_pos] = nspec;
     return w.len;
 }
 
@@ -318,12 +348,18 @@ static uint8_t handle(uint8_t cmd, const uint8_t *req, uint16_t len, uint8_t *re
         break;
 
     case CMD_LIVE_SUBSCRIBE: {
-        if (len != 4) { st = ST_ERR_BAD_LEN; break; }
+        if (len != 4 && len != 6) { st = ST_ERR_BAD_LEN; break; }
         uint16_t port = (uint16_t)(req[0] | (req[1] << 8));
         uint8_t hz = req[2];
         if (hz > NET_LIVE_MAX_HZ) hz = NET_LIVE_MAX_HZ;
+        uint16_t taps = (len == 6) ? (uint16_t)(req[4] | (req[5] << 8)) : 0;
+        if (!port || !hz) taps = 0;
         net_stream_set(port, hz, CMD_LIVE_FRAME);
         w_u8(&w, port ? hz : 0);
+        uint16_t kept = taps_set(taps);
+        w_u16(&w, kept);
+        w_u8(&w, (uint8_t)TAP_POINTS);
+        w_bytes(&w, taps_edges(), (uint16_t)(TAP_POINTS + 1u));
         break;
     }
 
@@ -460,6 +496,9 @@ static void post_send(uint8_t cmd)
 
 void comm_service(void)
 {
+    /* stream ended (lease expired / host gone): stop the real-time tap copies too */
+    if (taps_mask() && !net_stream_active()) taps_set(0);
+
     if (mode_get() == DEV_MODE_FW_UPDATE && fwu_in_progress() &&
         esp_timer_get_time() - s_fw_last_activity_us > FW_IDLE_TIMEOUT_US) {
         ESP_LOGW(TAG, "firmware update stalled -> abort");

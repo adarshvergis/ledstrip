@@ -133,6 +133,19 @@ static void publish_live(const audio_frame_t *f, bool audio)
         s_live.beat_count = (uint16_t)f->beat_count;
         s_live.centroid = f->centroid;
         memcpy(s_live.bands, f->bands, sizeof(s_live.bands));
+        s_live.scene = f->music.scene;
+        s_live.genre = f->music.genre;
+        s_live.bar_beat = f->music.bar_beat;
+        s_live.voice = f->melody.active;
+        s_live.w_groove = f->music.w_groove;
+        s_live.w_lead = f->music.w_lead;
+        s_live.w_perc = f->music.w_perc;
+        s_live.w_ambient = f->music.w_ambient;
+        s_live.clarity = f->music.clarity;
+        s_live.intensity = f->music.intensity;
+        s_live.build = f->music.build;
+        s_live.salience = f->melody.salience;
+        s_live.pitch_q8 = f->melody.pitch_q8;
     } else {
         memset(&s_live, 0, sizeof(s_live));
     }

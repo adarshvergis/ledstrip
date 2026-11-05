@@ -15,6 +15,7 @@
 #include "calibration.h"
 #include "mode_manager.h"
 #include "pipeline.h"
+#include "music_profiles.h"
 #include "light_control.h"
 #include "led_patterns.h"
 #include "data_acquisition.h"
@@ -232,6 +233,23 @@ static int c_features(int argc, char **argv, cli_out_t *o)
     return 0;
 }
 
+/* values are only meaningful while the Music show algorithm runs */
+static int c_music(int argc, char **argv, cli_out_t *o)
+{
+    static const char *scene[SCENE_COUNT] = {"silence", "ambient", "groove", "build", "drop", "fill", "lead"};
+    live_snapshot_t l;
+    mode_get_live(&l);
+    cli_printf(o, "scene %s  genre %s  bar beat %u\n", l.scene < SCENE_COUNT ? scene[l.scene] : "?",
+               music_profile(l.genre)->name, l.bar_beat + 1u);
+    cli_printf(o, "weights  groove %3u%%  lead %3u%%  perc %3u%%  ambient %3u%%\n", l.w_groove * 100u / 32767u,
+               l.w_lead * 100u / 32767u, l.w_perc * 100u / 32767u, l.w_ambient * 100u / 32767u);
+    cli_printf(o, "clarity %3u%%  intensity %3u%%  build %3u%%\n", l.clarity * 100u / 32767u,
+               l.intensity * 100u / 32767u, l.build * 100u / 32767u);
+    cli_printf(o, "voice %s  salience %3u%%  pitch %ld.%02ld (MIDI)\n", l.voice ? "on " : "off",
+               l.salience * 100u / 32767u, (long)(l.pitch_q8 >> 8), (long)(((l.pitch_q8 & 0xFF) * 100) >> 8));
+    return 0;
+}
+
 static int c_errors(int argc, char **argv, cli_out_t *o)
 {
     static const char *sev[] = {"info", "warn", "ERROR", "FATAL"};
@@ -340,6 +358,7 @@ static const cli_cmd_t s_cmds[] = {
     {"print_processed_samples", "<stage_no> [n<=256]",      "samples after stage index (see stages)", c_print_processed},
     {"stages",                  "",                         "stages of the active algorithm + timing", c_stages},
     {"features",                "",                         "level, bpm, beats, bands",               c_features},
+    {"music",                   "",                         "music show: scene, layer weights, genre", c_music},
     {"algo",                    "[n]",                      "list / select algorithm",                c_algo},
     {"runmode",                 "[audio|pattern]",          "show / set run mode",                    c_runmode},
     {"pattern",                 "[n]",                      "list / select pattern",                  c_pattern},

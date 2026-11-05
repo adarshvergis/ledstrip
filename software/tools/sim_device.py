@@ -4,7 +4,8 @@ Lets the host software be developed and tested without hardware:
 
 * TCP command server (default 127.0.0.1:4210), one client at a time
   (a new connection replaces the old one),
-* UDP live stream (LIVE_SUBSCRIBE) pushed to the client's address,
+* UDP live stream (LIVE_SUBSCRIBE) pushed to the client's address, with spectrum taps
+  (input / after a filter / after all stages) like the firmware,
 * UDP discovery responder (default 127.0.0.1:4211),
 * four fake algorithms built from five stages with FLOAT/INT/BOOL/ENUM params,
 * animated fake live data (beat at ~122 BPM, spectrum bands, LED strip),
@@ -35,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from ledhost import protocol as P  # noqa: E402
+from ledhost.dsp import biquad_db, reduce_bins, spectrum_edges  # noqa: E402
 from ledhost.protocol import Cmd, ParamType, Status  # noqa: E402
 
 log = logging.getLogger("sim")
@@ -44,6 +46,11 @@ BUILD_DATE = time.strftime("%Y-%m-%d %H:%M")
 MAC = "aa:bb:cc:00:11:22"
 NUM_PATTERNS = 5
 NUM_BANDS = 8
+FFT_BINS = 128          # firmware: AUDIO_FFT_SIZE / 2
+TAP_MAX_SLOTS = 4
+TAP_EDGES = spectrum_edges(FFT_BINS, 72)
+FILTER_TYPES = "off|lowpass|highpass|bandpass|notch|peak|lowshelf|highshelf"
+GENRES = "auto|edm|pop|rock|metal|rnb|hiphop|trap|orchestral"
 
 
 def _p(pid: int, ptype: int, mn: float, mx: float, df: float, step: float, name: str, unit: str) -> P.ParamSchema:
@@ -78,13 +85,28 @@ STAGES: dict[int, P.StageSchema] = {
         _p(2, ParamType.BOOL, 0, 1, 0, 1, "mirror", ""),
         _p(3, ParamType.FLOAT, 0, 1, 0.6, 0.01, "smoothing", ""),
     ]),
+    5: P.StageSchema(5, "Filter A", "Biquad filter (default: 45 Hz high-pass against rumble)", [
+        _p(0, ParamType.ENUM, 0, 7, 2, 1, "type", FILTER_TYPES),
+        _p(1, ParamType.FLOAT, 20, 7900, 45, 1, "frequency", "Hz"),
+        _p(2, ParamType.FLOAT, 0.1, 10, 0.707, 0.01, "q", ""),
+        _p(3, ParamType.FLOAT, -24, 24, 0, 0.5, "gain", "dB"),
+    ]),
+    6: P.StageSchema(6, "Filter B", "Biquad filter (default: off)", [
+        _p(0, ParamType.ENUM, 0, 7, 0, 1, "type", FILTER_TYPES),
+        _p(1, ParamType.FLOAT, 20, 7900, 1000, 1, "frequency", "Hz"),
+        _p(2, ParamType.FLOAT, 0.1, 10, 0.707, 0.01, "q", ""),
+        _p(3, ParamType.FLOAT, -24, 24, 0, 0.5, "gain", "dB"),
+    ]),
+    7: P.StageSchema(7, "Music", "Hits, scenes and genre", [
+        _p(0, ParamType.ENUM, 0, 8, 0, 1, "genre", GENRES),
+    ]),
 }
 
 ALGORITHMS = [
-    P.Algorithm(0, [0, 1, 2], "Amplitude Flash", "All LEDs follow the amplitude envelope"),
-    P.Algorithm(1, [0, 1, 3], "Beat Pulse", "All LEDs flash on every detected beat"),
-    P.Algorithm(2, [0, 1, 2, 4], "Spectrum Bars", "Band levels shown as LED segments"),
-    P.Algorithm(3, [0, 1, 3, 4], "Beat Segments", "Beat lights a segment chosen by spectral centroid"),
+    P.Algorithm(0, [0, 5, 1, 2, 3, 4, 7], "Music Show", "Beat (all / some LEDs), lead notes, drum fills, genre profiles"),
+    P.Algorithm(1, [0, 5, 1, 3], "Beat Pulse", "All LEDs flash on every detected beat"),
+    P.Algorithm(2, [0, 5, 6, 1, 2, 4], "Spectrum Bars", "Band levels shown as LED segments"),
+    P.Algorithm(3, [0, 5, 1, 3, 4], "Beat Segments", "Beat lights a segment chosen by spectral centroid"),
 ]
 
 DEFAULT_SETTINGS: dict[int, int | str] = {
@@ -119,6 +141,7 @@ class SimDevice:
         self.offline_until = 0.0          # simulated boot time: refuse clients until then
         self.on_reboot = lambda: None     # set by TcpServer: drops the client connection
         self.stream: tuple[int, int] | None = None   # (udp_port, rate_hz) set by LIVE_SUBSCRIBE
+        self.taps = 0                                  # spectrum tap mask set by LIVE_SUBSCRIBE
 
     # -- helpers ---------------------------------------------------------------
 
@@ -213,7 +236,50 @@ class SimDevice:
                 for i in range(n):
                     put(i, colorsys.hsv_to_rgb(centroid / 32767, 1, 1) if abs(i - centre) < width else (0, 0, 0))
         return P.LiveData(self.uptime_ms, level, int(bpm * 10), beat_count, centroid, int(self.device_mode),
-                          bands, bytes(leds))
+                          bands, bytes(leds), self.genre(alg, t), self.spectrum(alg, t, env))
+
+    def genre(self, alg: int, t: float) -> int:
+        """Music stage only in algorithm 0; the genre parameter wins, else 'auto' detection drifts."""
+        if 7 not in ALGORITHMS[alg].stage_ids or int(self.settings[10]) != P.RunMode.AUDIO:
+            return 0
+        forced = int(round(self.live[7][0]))
+        return forced if forced else 1 + int(t / 20) % 8
+
+    @staticmethod
+    def set_taps(mask: int) -> int:
+        """Like taps_set(): at most TAP_MAX_SLOTS taps, lowest ids first."""
+        kept = 0
+        for t in range(P.TAP_END + 1):
+            if mask & (1 << t) and bin(kept).count("1") < TAP_MAX_SLOTS and (t == P.TAP_END or t in STAGES):
+                kept |= 1 << t
+        return kept
+
+    def spectrum(self, alg: int, t: float, env: float) -> dict[int, bytes]:
+        """Pink-ish music (kick, vocal formant, hats) at each requested tap: the filter stages
+        of the algorithm are applied in order, so a tap shows the signal after its stage."""
+        if not self.taps or int(self.settings[10]) != P.RunMode.AUDIO:   # pattern mode: mic off
+            return {}
+        freqs = [(k + 1) * 8000 / FFT_BINS for k in range(FFT_BINS)]
+        db = []
+        for f in freqs:
+            v = -38 - 9 * math.log2(f / 250) if f > 250 else -38 + 2 * math.log2(f / 250)
+            v += 14 * env * math.exp(-((math.log2(f / 70)) ** 2) * 2)            # kick
+            v += 8 * math.exp(-((math.log2(f / (700 + 200 * math.sin(t))) ** 2) * 6))   # vocal formant
+            v += 6 * env * math.exp(-((math.log2(f / 6500)) ** 2) * 4)          # hats
+            db.append(v + random.uniform(-3, 3))
+        out = {}
+
+        def tap(tid: int) -> None:
+            if self.taps & (1 << tid):
+                pts = reduce_bins(db, TAP_EDGES)
+                out[tid] = bytes(max(0, min(255, round((v - P.SPEC_FLOOR_DB) * 2))) for v in pts)
+        for sid in ALGORITHMS[alg].stage_ids:
+            if sid in (5, 6):
+                ft, f0, q, g = self.live[sid][:4]
+                db = [a + b for a, b in zip(db, biquad_db(int(round(ft)), f0, q, g, 16000.0, freqs))]
+            tap(sid)
+        tap(P.TAP_END)
+        return out
 
     # -- dispatcher ------------------------------------------------------------
 
@@ -274,12 +340,14 @@ class SimDevice:
         if cmd == Cmd.GET_LIVE:
             return OK, self.live_data().encode(), False
         if cmd == Cmd.LIVE_SUBSCRIBE:
-            if len(pl) != 4:
+            if len(pl) not in (4, 6):
                 return self._err(Status.ERR_BAD_LEN)
-            port, hz, _ = struct.unpack("<HBB", pl)
+            port, hz, _ = struct.unpack_from("<HBB", pl)
+            taps = struct.unpack_from("<H", pl, 4)[0] if len(pl) == 6 else 0
             hz = min(hz, LIVE_MAX_HZ)
             self.stream = (port, hz) if port and hz else None
-            return OK, bytes([hz if port else 0]), False
+            self.taps = self.set_taps(taps if self.stream else 0)
+            return OK, P.SpectrumLayout(hz if port else 0, self.taps, TAP_EDGES).encode(), False
         if cmd == Cmd.GET_ALGORITHMS:
             return OK, P.encode_algorithms(ALGORITHMS), False
         if cmd == Cmd.GET_STAGE_LIST:
@@ -426,6 +494,7 @@ class SimDevice:
         self.device_mode = P.DeviceMode.MAIN
         self.fw = None
         self.stream = None
+        self.taps = 0
         self.live = {sid: list(v) for sid, v in self.saved.items()}
 
     def _cli(self, line: str) -> str:
@@ -483,6 +552,7 @@ class TcpServer:
             self.current.close()
         self.current = writer
         self.dev.stream = None
+        self.dev.taps = 0          # like comm_service: no stream -> no taps
         log.info("client connected: %s", peer)
         self.last_rx = time.monotonic()
         streamer = asyncio.create_task(self._stream(writer, peer[0]))
@@ -508,6 +578,7 @@ class TcpServer:
             streamer.cancel()
             if self.current is writer:
                 self.dev.stream = None
+                self.dev.taps = 0          # like comm_service: no stream -> no taps
             writer.close()
             log.info("client disconnected: %s", peer)
 
@@ -528,6 +599,7 @@ class TcpServer:
                 if now - self.last_rx > LIVE_LEASE_S:
                     log.info("live stream lease expired")
                     self.dev.stream = None
+                    self.dev.taps = 0          # like comm_service: no stream -> no taps
                     continue
                 port, hz = sub
                 if now >= due:

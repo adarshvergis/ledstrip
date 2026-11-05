@@ -4,8 +4,8 @@
 
 | Level | How | Needs hardware |
 |---|---|---|
-| Host DSP / pipeline tests | `Scripts/firmware/run_firmware_unit_tests.sh` (native gcc, 43 checks; see `UnitTest/README.md`) | no |
-| Host protocol tests | `python software/tools/proto_test.py` (starts the simulator itself on ports 14210/14211, debug then release build; 29 checks) | no (device simulator) |
+| Host DSP / pipeline tests | `Scripts/firmware/run_firmware_unit_tests.sh` (native gcc, 147 checks; see `UnitTest/README.md`) | no |
+| Host protocol tests | `python software/tools/proto_test.py` (starts the simulator itself on ports 14210/14211, debug then release build; 37 checks) | no (device simulator) |
 | Firmware build check | `Scripts/firmware/build.sh -debug` and `-release` | no |
 | On-device manual tests | flash, then use the host app / debug CLI (checklist in section 3) | yes |
 | Automated test workflow (all of the above, plus issue reporting) | `/run-tests`, see section 5 | optional |
@@ -59,7 +59,7 @@ Last synced commit: `08e70b2` (updated by the `/run-tests` workflow)
 | 3 | CLI `print_mic_samples 64` | 64 values that change with sound |
 | 4 | CLI `set_led_strip ff0000 0 59 5000` | whole strip red for 5 s |
 | 5 | CLI `runmode pattern`, `pattern 0..9` | each pattern is visible; mic stopped (`mic`: blocks frozen) |
-| 6 | Main view: algorithms 0..3 with music | 0 on/off with loudness, 1 flashes on beat, 2 spectrum bars, 3 beat pulses |
+| 6 | Live view: algorithms 0..3 with music | 0 music show (beat on all / some LEDs, lead sparks, fills; genre shown), 1 flashes on beat, 2 spectrum bars, 3 beat pulses |
 | 7 | CLI `latency` | processing well below 4000 us, no overruns |
 | 8 | Calibration: change a parameter | visible effect immediately |
 | 9 | Calibration: save, reboot, `params <stage>` | value persisted (**not yet tested**) |
@@ -71,6 +71,7 @@ Last synced commit: `08e70b2` (updated by the `/run-tests` workflow)
 | 15 | No SSID stored (fresh flash / erased `settings` partition, or debug host Factory reset + reboot) | WiFi off, audio / patterns still work (**not yet tested**) |
 | 16 | Switch the home AP off, then on | device reconnects by itself; `wifi_connect` warning once the back-off reaches 10 s (**not yet tested**) |
 | 17 | Live view at 30 / 60 / 100 Hz (Live > Controls) | live header shows about that fps, few lost frames, LEDs match the strip (**not yet tested**) |
+| 17a | Live spectrum: play a sine (e.g. 1 kHz), tick "After processing" and "Filter overlay", change a filter | peak at the tone's frequency and level; green end-of-pipeline curve and one curve + dashed response per enabled filter; CLI `latency` unchanged with overlays on (**not yet tested**) |
 | 18 | Release build (`Scripts/firmware/flash.sh -release -COMx`) | Debug mode not offered in the host app; main view, calibration and firmware update work (**not yet tested**) |
 
 ## 4. Security test cases
@@ -87,7 +88,7 @@ non-destructive and bounded.
 | S5 | Unauthenticated actions: `SET_SETTING` (debug builds), `FW_BEGIN`, reboot, CLI from any LAN client | document the exposure (no authentication) as Info / Medium; invalid images must be rejected and rolled back |
 | S6 | Firmware update with a corrupt image, a truncated image, a wrong-target image | rejected, old firmware still boots |
 | S7 | WiFi password stored in clear in flash and returned by `GET_SETTINGS` (debug builds) | report as finding; password must not appear in the serial log |
-| S8 | `LIVE_SUBSCRIBE`: rate > 100, rate 0, port 0, then the client goes silent | rate clamped to 100, 0 / port 0 stop the stream, stream stops after the 3 s lease |
+| S8 | `LIVE_SUBSCRIBE`: rate > 100, rate 0, port 0, then the client goes silent | rate clamped to 100, 0 / port 0 stop the stream (and clear the spectrum taps), stream stops after the 3 s lease |
 | S9 | Live stream target: the stream only goes to the IP of the connected TCP client | no datagrams to other hosts |
 | S10 | Release build: settings, errors, CLI and diagnostics commands (0x20-0x22, 0x40, 0x50/0x51, 0x60/0x61) | `ERR_UNKNOWN_CMD` |
 

@@ -19,7 +19,7 @@ The host software uses only the Python standard library (no venv, no pip install
 
 ## 2. Hardware
 
-Wiring and pin table: see [README.md](../README.md#wiring). Power the board over USB-C.
+Wiring and pin table: see [README.md](../README.md#hardware). Power the board over USB-C.
 
 Flash over the Xiao USB-C port. If the port is not detected, hold **BOOT**, tap **RESET**, release
 **BOOT** to enter the ROM bootloader, then flash again.
@@ -129,15 +129,16 @@ Scripts/software/host_run.sh -debug                  # start in debug mode
 Scripts/software/build.sh                            # optional: byte-compile check of the host sources
 ```
 
-CMD: `Scripts\software\host_run.bat`. Host settings (last device, live rate, debug mode) persist in
+CMD: `Scripts\software\host_run.bat`. Host settings (last device, live rate, debug mode, overlay tick boxes) persist in
 `software/ledapp_settings.json` (git-ignored).
 
 On first run Windows may show a firewall prompt for Python: allow it on private networks,
 otherwise the UDP live stream and discovery replies are blocked.
 
 The UI is dark only. Scan / Connect and the Debug toggle are in the top bar. Views: Live
-(LED strip, LED count, WiFi strength, tempo, level, tone, spectrum; controls for run mode,
-algorithm, pattern, brightness and live rate 30/60/100 Hz), Calibration, Firmware (device
+(LED strip, LED count, WiFi strength, tempo, genre, level, tone, spectrum with optional
+"After processing" and "Filter overlay" curves; controls for run mode, algorithm, pattern,
+brightness and live rate 30/60/100 Hz), Calibration, Firmware (device
 details, update). The Debug toggle (shown only when the firmware is a debug build) adds a
 Debug tab: Settings, Errors, Diagnostics, CLI, Log. The app reads
 everything once per (re)connect; use the Refresh buttons to reload.

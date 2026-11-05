@@ -19,10 +19,13 @@ typedef enum {
     STAGE_AGC                  = 4,     /**< level normalisation -> 0..1                */
     STAGE_SPECTRUM             = 5,     /**< FFT, log bands, spectral centroid          */
     STAGE_BEAT                 = 6,     /**< bass onset detection + tempo tracking      */
-    STAGE_RENDER_LEVEL         = 7,     /**< all LEDs follow the level                  */
+    STAGE_RETIRED_7            = 7,     /**< was "render level" (amplitude): never reuse */
     STAGE_RENDER_BEAT_FLASH    = 8,     /**< all LEDs on the beat                       */
     STAGE_RENDER_SPECTRUM      = 9,     /**< one bar per frequency band                 */
     STAGE_RENDER_BEAT_SEGMENTS = 10,    /**< beat pulses placed by spectral centroid    */
+    STAGE_MELODY               = 11,    /**< lead voice pitch / note tracker            */
+    STAGE_MUSIC                = 12,    /**< hits, scenes (groove/lead/fill...), genre  */
+    STAGE_RENDER_SHOW          = 13,    /**< scene-aware layered light show             */
     STAGE_COUNT
 } stage_id_t;
 
@@ -88,19 +91,6 @@ typedef enum {
     BEAT_P_COUNT
 } beat_param_t;
 
-/* ---- STAGE_RENDER_LEVEL ---- */
-typedef enum {
-    RLEVEL_P_MODE = 0,                  /**< enum on/off|dimming */
-    RLEVEL_P_HUE,
-    RLEVEL_P_SATURATION,
-    RLEVEL_P_THRESHOLD,
-    RLEVEL_P_HYSTERESIS,
-    RLEVEL_P_HOLD_MS,
-    RLEVEL_P_MIN_BRIGHTNESS,
-    RLEVEL_P_HUE_SPREAD,
-    RLEVEL_P_COUNT
-} rlevel_param_t;
-
 /* ---- STAGE_RENDER_BEAT_FLASH ---- */
 typedef enum {
     RBEAT_P_MODE = 0,                   /**< enum on/off|flash */
@@ -140,5 +130,44 @@ typedef enum {
     RSEG_P_SPREAD,                      /**< bool */
     RSEG_P_COUNT
 } rseg_param_t;
+
+/* ---- STAGE_MELODY ---- */
+typedef enum {
+    MELODY_P_MIN_FREQ_HZ = 0,
+    MELODY_P_MAX_FREQ_HZ,
+    MELODY_P_SALIENCE,                  /**< tonality threshold for "a voice is playing" */
+    MELODY_P_NOTE_MIN_MS,
+    MELODY_P_GLIDE_MS,
+    MELODY_P_REATTACK_DB,
+    MELODY_P_COUNT
+} melody_param_t;
+
+/* ---- STAGE_MUSIC ---- */
+typedef enum {
+    MUSIC_P_GENRE = 0,                  /**< enum auto|edm|pop|rock|metal|rnb|hiphop|trap|orchestral */
+    MUSIC_P_CLARITY,
+    MUSIC_P_LEAD_SENS,
+    MUSIC_P_FILL_SENS,
+    MUSIC_P_HIT_DB,
+    MUSIC_P_FADE_MS,
+    MUSIC_P_DROP_DETECT,                /**< bool */
+    MUSIC_P_DROP_BARS,
+    MUSIC_P_BEATS_PER_BAR,
+    MUSIC_P_COUNT
+} music_param_t;
+
+/* ---- STAGE_RENDER_SHOW ---- */
+typedef enum {
+    RSHOW_P_PALETTE = 0,                /**< enum genre|custom */
+    RSHOW_P_HUE,
+    RSHOW_P_SATURATION,
+    RSHOW_P_FULL_BIAS,
+    RSHOW_P_ON_TIME_MS,                 /**< 0 = genre profile */
+    RSHOW_P_LEAD_TRAIL_MS,
+    RSHOW_P_SPARKLE,
+    RSHOW_P_AMBIENT,
+    RSHOW_P_MAX_SPARKS,
+    RSHOW_P_COUNT
+} rshow_param_t;
 
 #endif /* STAGE_PARAMS_H */

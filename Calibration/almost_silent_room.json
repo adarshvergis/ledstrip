@@ -1,0 +1,599 @@
+{
+  "params": [
+    {
+      "stage": 0,
+      "param": 0,
+      "value": 4.0,
+      "stage_name": "Front-end",
+      "name": "input_gain"
+    },
+    {
+      "stage": 0,
+      "param": 1,
+      "value": 30.0,
+      "stage_name": "Front-end",
+      "name": "dc_cutoff"
+    },
+    {
+      "stage": 0,
+      "param": 2,
+      "value": 0.0,
+      "stage_name": "Front-end",
+      "name": "mic_channel"
+    },
+    {
+      "stage": 1,
+      "param": 0,
+      "value": 2.0,
+      "stage_name": "Filter A",
+      "name": "type"
+    },
+    {
+      "stage": 1,
+      "param": 1,
+      "value": 2979.0,
+      "stage_name": "Filter A",
+      "name": "frequency"
+    },
+    {
+      "stage": 1,
+      "param": 2,
+      "value": 0.707,
+      "stage_name": "Filter A",
+      "name": "q"
+    },
+    {
+      "stage": 1,
+      "param": 3,
+      "value": 0.0,
+      "stage_name": "Filter A",
+      "name": "gain"
+    },
+    {
+      "stage": 2,
+      "param": 0,
+      "value": 0.0,
+      "stage_name": "Filter B",
+      "name": "type"
+    },
+    {
+      "stage": 2,
+      "param": 1,
+      "value": 1000.0,
+      "stage_name": "Filter B",
+      "name": "frequency"
+    },
+    {
+      "stage": 2,
+      "param": 2,
+      "value": 0.707,
+      "stage_name": "Filter B",
+      "name": "q"
+    },
+    {
+      "stage": 2,
+      "param": 3,
+      "value": 0.0,
+      "stage_name": "Filter B",
+      "name": "gain"
+    },
+    {
+      "stage": 3,
+      "param": 0,
+      "value": 4.0,
+      "stage_name": "Envelope",
+      "name": "attack"
+    },
+    {
+      "stage": 3,
+      "param": 1,
+      "value": 150.0,
+      "stage_name": "Envelope",
+      "name": "release"
+    },
+    {
+      "stage": 3,
+      "param": 2,
+      "value": 0.0,
+      "stage_name": "Envelope",
+      "name": "detector"
+    },
+    {
+      "stage": 4,
+      "param": 0,
+      "value": 3.0,
+      "stage_name": "AGC",
+      "name": "peak_decay"
+    },
+    {
+      "stage": 4,
+      "param": 1,
+      "value": -62.0,
+      "stage_name": "AGC",
+      "name": "noise_gate"
+    },
+    {
+      "stage": 4,
+      "param": 2,
+      "value": 40.0,
+      "stage_name": "AGC",
+      "name": "max_gain"
+    },
+    {
+      "stage": 4,
+      "param": 3,
+      "value": 2.0,
+      "stage_name": "AGC",
+      "name": "headroom"
+    },
+    {
+      "stage": 4,
+      "param": 4,
+      "value": 0.0,
+      "stage_name": "AGC",
+      "name": "curve"
+    },
+    {
+      "stage": 4,
+      "param": 5,
+      "value": 24.0,
+      "stage_name": "AGC",
+      "name": "range"
+    },
+    {
+      "stage": 5,
+      "param": 0,
+      "value": 60.0,
+      "stage_name": "Spectrum",
+      "name": "min_freq"
+    },
+    {
+      "stage": 5,
+      "param": 1,
+      "value": 6000.0,
+      "stage_name": "Spectrum",
+      "name": "max_freq"
+    },
+    {
+      "stage": 5,
+      "param": 2,
+      "value": 36.0,
+      "stage_name": "Spectrum",
+      "name": "range"
+    },
+    {
+      "stage": 5,
+      "param": 3,
+      "value": -80.0,
+      "stage_name": "Spectrum",
+      "name": "floor"
+    },
+    {
+      "stage": 5,
+      "param": 4,
+      "value": 8.0,
+      "stage_name": "Spectrum",
+      "name": "attack"
+    },
+    {
+      "stage": 5,
+      "param": 5,
+      "value": 180.0,
+      "stage_name": "Spectrum",
+      "name": "release"
+    },
+    {
+      "stage": 5,
+      "param": 6,
+      "value": 1.0,
+      "stage_name": "Spectrum",
+      "name": "normalize"
+    },
+    {
+      "stage": 5,
+      "param": 7,
+      "value": 2.0,
+      "stage_name": "Spectrum",
+      "name": "norm_decay"
+    },
+    {
+      "stage": 6,
+      "param": 0,
+      "value": 150.0,
+      "stage_name": "Beat detector",
+      "name": "bass_cutoff"
+    },
+    {
+      "stage": 6,
+      "param": 1,
+      "value": 1.6,
+      "stage_name": "Beat detector",
+      "name": "threshold_factor"
+    },
+    {
+      "stage": 6,
+      "param": 2,
+      "value": 2.5,
+      "stage_name": "Beat detector",
+      "name": "min_onset"
+    },
+    {
+      "stage": 6,
+      "param": 3,
+      "value": 75.0,
+      "stage_name": "Beat detector",
+      "name": "min_bpm"
+    },
+    {
+      "stage": 6,
+      "param": 4,
+      "value": 180.0,
+      "stage_name": "Beat detector",
+      "name": "max_bpm"
+    },
+    {
+      "stage": 6,
+      "param": 5,
+      "value": 1.0,
+      "stage_name": "Beat detector",
+      "name": "tempo_lock"
+    },
+    {
+      "stage": 6,
+      "param": 6,
+      "value": 0.18,
+      "stage_name": "Beat detector",
+      "name": "lock_tolerance"
+    },
+    {
+      "stage": 6,
+      "param": 7,
+      "value": 4.0,
+      "stage_name": "Beat detector",
+      "name": "flywheel_beats"
+    },
+    {
+      "stage": 8,
+      "param": 0,
+      "value": 0.0,
+      "stage_name": "Render: beat (all)",
+      "name": "mode"
+    },
+    {
+      "stage": 8,
+      "param": 1,
+      "value": 110.0,
+      "stage_name": "Render: beat (all)",
+      "name": "on_time"
+    },
+    {
+      "stage": 8,
+      "param": 2,
+      "value": 220.0,
+      "stage_name": "Render: beat (all)",
+      "name": "decay"
+    },
+    {
+      "stage": 8,
+      "param": 3,
+      "value": 280.0,
+      "stage_name": "Render: beat (all)",
+      "name": "hue"
+    },
+    {
+      "stage": 8,
+      "param": 4,
+      "value": 1.0,
+      "stage_name": "Render: beat (all)",
+      "name": "saturation"
+    },
+    {
+      "stage": 8,
+      "param": 5,
+      "value": 40.0,
+      "stage_name": "Render: beat (all)",
+      "name": "hue_step"
+    },
+    {
+      "stage": 8,
+      "param": 6,
+      "value": 1.0,
+      "stage_name": "Render: beat (all)",
+      "name": "use_strength"
+    },
+    {
+      "stage": 8,
+      "param": 7,
+      "value": 0.0,
+      "stage_name": "Render: beat (all)",
+      "name": "floor"
+    },
+    {
+      "stage": 9,
+      "param": 0,
+      "value": 0.0,
+      "stage_name": "Render: spectrum bars",
+      "name": "layout"
+    },
+    {
+      "stage": 9,
+      "param": 1,
+      "value": 0.0,
+      "stage_name": "Render: spectrum bars",
+      "name": "hue_low"
+    },
+    {
+      "stage": 9,
+      "param": 2,
+      "value": 270.0,
+      "stage_name": "Render: spectrum bars",
+      "name": "hue_high"
+    },
+    {
+      "stage": 9,
+      "param": 3,
+      "value": 1.0,
+      "stage_name": "Render: spectrum bars",
+      "name": "gain"
+    },
+    {
+      "stage": 9,
+      "param": 4,
+      "value": 0.08,
+      "stage_name": "Render: spectrum bars",
+      "name": "threshold"
+    },
+    {
+      "stage": 9,
+      "param": 5,
+      "value": 400.0,
+      "stage_name": "Render: spectrum bars",
+      "name": "peak_hold"
+    },
+    {
+      "stage": 9,
+      "param": 6,
+      "value": 2.5,
+      "stage_name": "Render: spectrum bars",
+      "name": "peak_fall"
+    },
+    {
+      "stage": 9,
+      "param": 7,
+      "value": 1.0,
+      "stage_name": "Render: spectrum bars",
+      "name": "fade"
+    },
+    {
+      "stage": 10,
+      "param": 0,
+      "value": 3.0,
+      "stage_name": "Render: beat segments",
+      "name": "min_width"
+    },
+    {
+      "stage": 10,
+      "param": 1,
+      "value": 18.0,
+      "stage_name": "Render: beat segments",
+      "name": "max_width"
+    },
+    {
+      "stage": 10,
+      "param": 2,
+      "value": 450.0,
+      "stage_name": "Render: beat segments",
+      "name": "decay"
+    },
+    {
+      "stage": 10,
+      "param": 3,
+      "value": 0.0,
+      "stage_name": "Render: beat segments",
+      "name": "position"
+    },
+    {
+      "stage": 10,
+      "param": 4,
+      "value": 0.0,
+      "stage_name": "Render: beat segments",
+      "name": "hue_mode"
+    },
+    {
+      "stage": 10,
+      "param": 5,
+      "value": 200.0,
+      "stage_name": "Render: beat segments",
+      "name": "hue"
+    },
+    {
+      "stage": 10,
+      "param": 6,
+      "value": 1.0,
+      "stage_name": "Render: beat segments",
+      "name": "saturation"
+    },
+    {
+      "stage": 10,
+      "param": 7,
+      "value": 5.0,
+      "stage_name": "Render: beat segments",
+      "name": "max_pulses"
+    },
+    {
+      "stage": 10,
+      "param": 8,
+      "value": 1.0,
+      "stage_name": "Render: beat segments",
+      "name": "spread"
+    },
+    {
+      "stage": 11,
+      "param": 0,
+      "value": 150.0,
+      "stage_name": "Melody",
+      "name": "min_freq"
+    },
+    {
+      "stage": 11,
+      "param": 1,
+      "value": 2000.0,
+      "stage_name": "Melody",
+      "name": "max_freq"
+    },
+    {
+      "stage": 11,
+      "param": 2,
+      "value": 0.35,
+      "stage_name": "Melody",
+      "name": "salience"
+    },
+    {
+      "stage": 11,
+      "param": 3,
+      "value": 24.0,
+      "stage_name": "Melody",
+      "name": "note_min"
+    },
+    {
+      "stage": 11,
+      "param": 4,
+      "value": 20.0,
+      "stage_name": "Melody",
+      "name": "glide"
+    },
+    {
+      "stage": 11,
+      "param": 5,
+      "value": 4.0,
+      "stage_name": "Melody",
+      "name": "reattack"
+    },
+    {
+      "stage": 12,
+      "param": 0,
+      "value": 0.0,
+      "stage_name": "Music analysis",
+      "name": "genre"
+    },
+    {
+      "stage": 12,
+      "param": 1,
+      "value": 0.35,
+      "stage_name": "Music analysis",
+      "name": "clarity_threshold"
+    },
+    {
+      "stage": 12,
+      "param": 2,
+      "value": 1.0,
+      "stage_name": "Music analysis",
+      "name": "lead_sensitivity"
+    },
+    {
+      "stage": 12,
+      "param": 3,
+      "value": 1.0,
+      "stage_name": "Music analysis",
+      "name": "fill_sensitivity"
+    },
+    {
+      "stage": 12,
+      "param": 4,
+      "value": 4.0,
+      "stage_name": "Music analysis",
+      "name": "hit_threshold"
+    },
+    {
+      "stage": 12,
+      "param": 5,
+      "value": 250.0,
+      "stage_name": "Music analysis",
+      "name": "scene_fade"
+    },
+    {
+      "stage": 12,
+      "param": 6,
+      "value": 1.0,
+      "stage_name": "Music analysis",
+      "name": "drop_detect"
+    },
+    {
+      "stage": 12,
+      "param": 7,
+      "value": 8.0,
+      "stage_name": "Music analysis",
+      "name": "drop_bars"
+    },
+    {
+      "stage": 12,
+      "param": 8,
+      "value": 4.0,
+      "stage_name": "Music analysis",
+      "name": "beats_per_bar"
+    },
+    {
+      "stage": 13,
+      "param": 0,
+      "value": 0.0,
+      "stage_name": "Render: music show",
+      "name": "palette"
+    },
+    {
+      "stage": 13,
+      "param": 1,
+      "value": 280.0,
+      "stage_name": "Render: music show",
+      "name": "hue"
+    },
+    {
+      "stage": 13,
+      "param": 2,
+      "value": 1.0,
+      "stage_name": "Render: music show",
+      "name": "saturation"
+    },
+    {
+      "stage": 13,
+      "param": 3,
+      "value": 0.0,
+      "stage_name": "Render: music show",
+      "name": "full_bias"
+    },
+    {
+      "stage": 13,
+      "param": 4,
+      "value": 0.0,
+      "stage_name": "Render: music show",
+      "name": "on_time"
+    },
+    {
+      "stage": 13,
+      "param": 5,
+      "value": 300.0,
+      "stage_name": "Render: music show",
+      "name": "lead_trail"
+    },
+    {
+      "stage": 13,
+      "param": 6,
+      "value": 1.0,
+      "stage_name": "Render: music show",
+      "name": "sparkle"
+    },
+    {
+      "stage": 13,
+      "param": 7,
+      "value": 0.3,
+      "stage_name": "Render: music show",
+      "name": "ambient"
+    },
+    {
+      "stage": 13,
+      "param": 8,
+      "value": 6.0,
+      "stage_name": "Render: music show",
+      "name": "max_sparks"
+    }
+  ]
+}

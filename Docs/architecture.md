@@ -8,7 +8,7 @@ Seeed Studio Xiao ESP32-C3 (RISC-V RV32IMC, 160 MHz, **no FPU**), WS2812B x60, I
 |---|---|---|
 | Base | ESP-IDF v5.3 **only** for build system, FreeRTOS, WiFi/TCP-IP, 2nd-stage bootloader, OTA and flash access | The C3 radio needs Espressif's closed WiFi blobs, which need FreeRTOS + lwIP. Everything else is our own register-level C. |
 | Own code | I2S mic driver, WS2812 driver, GDMA handling, watchdog, DSP library, pipeline, config store, protocol, CLI, diagnostics | No vendor driver layers (`driver/`, `esp_driver_*`) are used. Register maps come from the `soc/*_struct.h` headers. |
-| Host link | WiFi **station only** (home network), binary TCP protocol, UDP live stream, UDP discovery | The PC stays on its own network and keeps internet (no device AP to join). BLE was rejected: stack size, 15-30 ms connection interval, slow OTA. mDNS is not needed (UDP discovery). Credentials come from the `settings` partition (written over USB with `flash_settings`, or from the host in debug builds). |
+| Host link | WiFi **station only** (home network), binary TCP protocol, UDP live stream, UDP discovery | The PC stays on its own network and keeps internet (no device AP to join). BLE was rejected: stack size, 15-30 ms connection interval, slow OTA. mDNS is not needed (UDP discovery). Credentials come from the `settings` partition (written over USB with `update_settings`, or from the host in debug builds). |
 | Build variants | debug (`INTERNAL_TEST_BUILD` -> `ENABLE_DEBUG_HOST`, `ENABLE_DEBUG_CLI`, `ENABLE_SELF_DIAGNOSTICS`) / release | Release compiles out settings (0x20-0x22), errors (0x60/0x61), CLI (0x40) and diagnostics (0x50/0x51) and answers them with `ERR_UNKNOWN_CMD`. It serves only the main view, calibration and firmware update. |
 | RTOS | FreeRTOS (required by WiFi anyway) | The real-time task runs at priority 24, above WiFi (23). It blocks on the DMA interrupt, so it uses CPU only while it has a block to process. |
 | Sample hand-off | Chunked: 64-sample DMA blocks (4 ms @ 16 kHz) | DMA fills the ring with no CPU cost. The ISR only wakes the task. Blocks amortise the per-block overhead, and the block size sets the latency. |
@@ -37,11 +37,12 @@ hop must be longer than the LED frame time.
                                                               |
  rt task (prio 24) <------------------------------------------+
    daq_read_block(): newest block -> mono Q31 (older blocks dropped if late)
-   pipeline_process(): stage 0 .. stage N (audio_frame_t)
+   pipeline_process(): stage 0 .. stage N (audio_frame_t), + block copy at requested taps
    light_show(): overlays -> brightness -> power limit -> GPSPI2/GDMA -> WS2812B
 
  comm task (prio 5)      TCP 4210: frames -> comm.c dispatcher -> calibration / mode / fwu / cli
-                         + UDP live push (LIVE_SUBSCRIBE) to the connected host
+                         + UDP live push (LIVE_SUBSCRIBE) to the connected host,
+                           incl. the tap spectra (FFT here, at the stream rate)
  discovery task (prio 3) UDP 4211: discovery replies + beacons (beacons only while connected)
  app_main (prio 1)       supervisor: watchdog feed, fatal reboot, health, OTA confirm
 ```
@@ -56,6 +57,21 @@ latest `GET_LIVE` snapshot as a UDP datagram to the host's IP at that rate (`MSG
 so a full send queue drops a frame instead of blocking). The stream stops when the TCP
 client sends nothing for 3 s (the host PINGs every 1 s) or disconnects. Details in
 `protocol.md`.
+
+Live spectra (`spectrum_taps.c`): `LIVE_SUBSCRIBE` also carries a tap mask (bit n = signal
+after stage id n, bit 15 = after the last stage; at most 4 taps, lowest ids first). The host
+asks for the input (after the front-end) and, only when its overlays are ticked, the filter
+stages and the end of the pipeline.
+
+* The real-time task only copies each 64-sample block at a requested tap into a 256-sample
+  ring for that tap. It is lock-free: a sequence counter, and the comm task copies again if
+  it changed meanwhile. Unrequested taps cost nothing.
+* The comm task computes a Hann-windowed 256-point Q15 FFT per tap, only at the stream rate
+  (<= 100 Hz, not the 250 Hz block rate), and reduces the 128 bins to 72 log-spaced points
+  (single bins up to ~3.9 kHz, groups of 4-8 bins above; mean power per point), calibrated
+  so that a sine reads its true dBFS level.
+* So the mic -> light path gets no FFT work, and unticked overlays cost neither CPU nor WiFi
+  bytes. The taps are cleared when the stream stops.
 
 Other tasks never touch the microphone, the pipeline state or the strip. They post requests:
 
@@ -91,15 +107,18 @@ locks, and stages never see half-applied parameters.
 | 4 | AGC | level 0..1 against a decaying peak; noise gate, max gain, log or linear curve |
 | 5 | Spectrum | sliding 256-pt FFT (75 % overlap), 12 log bands, per-band normalisation, centroid |
 | 6 | Beat | bass onset detection (16 ms energy window), autocorrelation tempo with a 120 BPM prior, phase-locked prediction with flywheel and phase re-acquisition |
-| 7 | Render level | all LEDs on/off (threshold, hysteresis, hold) or dimming |
+| 7 | (retired) | was "render level" of the removed amplitude algorithm; the id is never reused |
 | 8 | Render beat flash | all LEDs on with the beat (on/off or decaying flash, colour step per beat) |
 | 9 | Render spectrum | one segment per band (*which* LEDs), bar length = band level (*how many*) |
 | 10 | Render beat segments | pulse per beat: position = spectral centroid, width = beat strength |
+| 11 | Melody | lead voice tracker: 512-pt FFT, harmonic-sum pitch, salience (one dominant voice?), note starts |
+| 12 | Music analysis | drum hits (kick / tom / snare / hat / crash), beat clarity, fill / build-up / drop, layer weights, genre (fixed or auto) |
+| 13 | Render show | layers mixed by the weights: groove (all / some LEDs per beat), lead note sparks, percussion, ambient / build-up |
 
 | Algo | Name | Stages |
 |---|---|---|
-| 0 | Amplitude (all LEDs) | 0 1 2 3 4 7 |
-| 1 | Beat (all LEDs) - default | 0 1 3 4 6 8 |
+| 0 | Music show - default | 0 1 3 4 5 6 11 12 13 |
+| 1 | Beat (all LEDs) | 0 1 3 4 6 8 |
 | 2 | Spectrum bars | 0 1 2 3 4 5 9 |
 | 3 | Beat segments | 0 1 3 4 5 6 10 |
 

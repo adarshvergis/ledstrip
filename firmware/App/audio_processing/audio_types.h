@@ -18,6 +18,55 @@
 #include "ws2812.h"
 #include "stage_params.h"
 
+/** Lead voice (stage_melody). */
+typedef struct {
+    bool     active;                    /**< a pitched voice is sounding              */
+    bool     note_on;                   /**< a new note started in this block         */
+    int32_t  pitch_q8;                  /**< semitones (MIDI note number), Q8         */
+    uint16_t salience;                  /**< tonality of the strongest voice, Q15     */
+    uint16_t level;                     /**< loudness of the voice 0..32767           */
+} melody_t;
+
+/** What the music is doing right now (dominant scene, for display / debugging). */
+typedef enum {
+    SCENE_SILENCE = 0,
+    SCENE_AMBIENT,
+    SCENE_GROOVE,                       /**< clear beat (verse groove, chorus)        */
+    SCENE_BUILD,                        /**< rising energy before a drop              */
+    SCENE_DROP,                         /**< first bars after a build / break         */
+    SCENE_FILL,                         /**< drum fill: dense tom / snare hits        */
+    SCENE_LEAD,                         /**< solo / vocal line dominates              */
+    SCENE_COUNT
+} scene_t;
+
+/** Percussive hit classes (bit numbers of music_t.hits). */
+typedef enum {
+    HIT_KICK = 0,
+    HIT_TOM,
+    HIT_SNARE,
+    HIT_HAT,
+    HIT_CRASH,
+    HIT_COUNT
+} hit_t;
+
+/** Music analysis (stage_music). Weights say how much each render layer should show. */
+typedef struct {
+    uint8_t  scene;                     /**< scene_t                                  */
+    uint8_t  genre;                     /**< effective genre_t (never GENRE_AUTO)     */
+    uint8_t  bar_beat;                  /**< beat inside the bar, 0 = downbeat        */
+    uint8_t  hits;                      /**< bit per hit_t, set in the block of a hit */
+    uint16_t hit_strength[HIT_COUNT];   /**< Q15, valid where the hits bit is set     */
+    uint16_t tom_pos;                   /**< pitch position of the last tom hit, Q15  */
+    uint16_t w_groove, w_lead, w_perc, w_ambient;  /**< layer weights, Q15            */
+    uint16_t intensity;                 /**< short vs long term loudness, Q15         */
+    uint16_t clarity;                   /**< how clear / steady the beat is, Q15      */
+    uint16_t build;                     /**< build-up progress, Q15                   */
+    uint16_t sub;                       /**< sub-bass (808) level, Q15                */
+    bool     drop;                      /**< inside the bars after a drop             */
+    bool     hat_roll;                  /**< fast hi-hat roll running                 */
+    uint32_t bar_count;
+} music_t;
+
 /** One processing block and all features derived from it. */
 typedef struct {
     /* signal */
@@ -35,6 +84,7 @@ typedef struct {
     uint16_t bands[AUDIO_NUM_BANDS];    /**< band levels 0..32767                     */
     uint16_t centroid;                  /**< spectral centroid / Nyquist, Q15         */
     uint8_t  dominant_band;
+    int16_t  band_db[AUDIO_NUM_BANDS];  /**< raw band level, dBFS Q8 (no smoothing)   */
 
     /* rhythm */
     bool     beat;                      /**< a beat occurs in this block              */
@@ -43,6 +93,14 @@ typedef struct {
     uint16_t bpm_x10;                   /**< tempo * 10, 0 = unknown                  */
     uint32_t beat_count;
     int32_t  onset;                     /**< onset detection function, Q8 dB          */
+    uint16_t tempo_conf;                /**< tempo confidence, Q15                    */
+    bool     beat_predicted;            /**< beat came from the flywheel (no onset)   */
+    bool     bass_onset;                /**< bass onset (kick / 808) in this block    */
+    uint16_t bass_onset_strength;       /**< Q15                                      */
+
+    /* music structure */
+    melody_t melody;
+    music_t  music;
 
     /* output */
     led_rgb_t *leds;                    /**< render target                            */
@@ -110,9 +168,11 @@ extern const stage_def_t g_stage_envelope;
 extern const stage_def_t g_stage_agc;
 extern const stage_def_t g_stage_spectrum;
 extern const stage_def_t g_stage_beat;
-extern const stage_def_t g_stage_render_level;
 extern const stage_def_t g_stage_render_beat_flash;
 extern const stage_def_t g_stage_render_spectrum;
 extern const stage_def_t g_stage_render_beat_segments;
+extern const stage_def_t g_stage_melody;
+extern const stage_def_t g_stage_music;
+extern const stage_def_t g_stage_render_show;
 
 #endif /* AUDIO_TYPES_H */

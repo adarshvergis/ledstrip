@@ -62,6 +62,9 @@ int net_start(const net_config_t *cfg, net_handler_t handler, net_post_send_t po
  */
 void net_stream_set(uint16_t udp_port, uint8_t rate_hz, uint8_t stream_cmd);
 
+/** True while the UDP live stream is running. */
+bool net_stream_active(void);
+
 net_state_t net_state(void);
 
 /** Current IP address as dotted string ("" if none). */

@@ -30,7 +30,7 @@
 #define FW_HW_NAME                  "Seeed Xiao ESP32C3 + WS2812B x60 + INMP441"
 
 /** Version of the host <-> device protocol (Docs/protocol.md). */
-#define PROTOCOL_VERSION            2
+#define PROTOCOL_VERSION            3
 
 /* ========================================================================== */
 /*  Build variants                                                            */
@@ -157,7 +157,7 @@
 /*  Algorithms                                                                */
 /* ========================================================================== */
 
-#define ALGO_AMPLITUDE_ALL          0       /**< All LEDs follow the amplitude envelope            */
+#define ALGO_MUSIC_SHOW             0       /**< Scene-aware show: beat, lead notes, fills, genre   */
 #define ALGO_BEAT_ALL               1       /**< All LEDs flash on the detected main beat          */
 #define ALGO_SPECTRUM_BARS          2       /**< Amplitude per frequency band -> bar per band      */
 #define ALGO_BEAT_SEGMENTS          3       /**< Beat pulses positioned by spectral centroid       */
@@ -166,7 +166,7 @@
 #define NUM_ALGORITHMS              4
 
 /** Algorithm used on first boot / after a settings factory reset. */
-#define DEFAULT_ALGORITHM           ALGO_BEAT_ALL
+#define DEFAULT_ALGORITHM           ALGO_MUSIC_SHOW
 /** Spelling used in the original specification. */
 #define DEFAULT_LGORITHM            DEFAULT_ALGORITHM
 

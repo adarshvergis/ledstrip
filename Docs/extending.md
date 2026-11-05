@@ -29,6 +29,12 @@ audio_frame_t (audio_types.h)  = the data passed from stage to stage, once per b
   state instance and one parameter set, shared by all algorithms that use the stage.
 * The host UI builds parameter editors automatically from the schema (`GET_STAGE_SCHEMA`).
   **No host changes are needed** for new stages or parameters.
+* Every stage is also a **live spectrum tap** point (tap bit n = after stage id n, see
+  `spectrum_taps.h`); stage ids must stay below `TAP_END` (15), checked by a static assert.
+* The host's **Filter overlay** treats a stage as a filter when its first four parameters are
+  `type`, `frequency`, `q`, `gain`, and draws its response with `software/ledhost/dsp.py`
+  (`biquad_db`, a copy of the firmware's `dsp_biquad_design`). Keep the two in sync when
+  adding or changing filter types.
 
 ### audio_frame_t fields (inputs / outputs)
 
@@ -160,7 +166,7 @@ Either insert it into an existing list, or create a new algorithm (section 4).
 
 * The new `.c` file is picked up by the glob in `firmware/App/CMakeLists.txt`. Because it is a new
   file, re-run CMake (`Scripts/firmware/build.sh -clean`, or touch `firmware/App/CMakeLists.txt`), then build.
-* Add the file to `Scripts/firmware/run_firmware_unit_tests.sh` if it should be tested on the PC, and add a check in
+* Add the file to the source list in `Scripts/firmware/sub/unit_tests.ps1` if it should be tested on the PC, and add a check in
   `UnitTest/host/test_host.c`.
 * In the host: Calibration tab -> enter calibration mode -> tune -> **Save to flash**.
 
@@ -294,7 +300,7 @@ static diag_bench_t s_bench = DIAG_BENCH_INIT("group", "name");
 | Need | Change |
 |---|---|
 | Lower latency | `AUDIO_HOP_SIZE` 32 (2 ms blocks; LED frame 2.05 ms must fit) |
-| Finer spectrum | `AUDIO_FFT_SIZE` 512 + `AUDIO_FFT_LOG2` 9 (more CPU, slower time response) |
+| Finer spectrum | `AUDIO_FFT_SIZE` 512 + `AUDIO_FFT_LOG2` 9 (more CPU, slower time response; the live spectrum taps use the same size and their `u8` bin edges only reach bin 255, so `spectrum_taps.c` / the protocol would need changing too) |
 | More bands | `AUDIO_NUM_BANDS` (render spectrum divides the strip by it; protocol sends the count) |
 | Other pins / LED count | `PIN_*`, `LED_MAX_COUNT` (<= ~450 with one DMA descriptor) |
 | Release build | `Scripts/firmware/build.sh -release` (no settings / errors from the host, no CLI, no diagnostics) |

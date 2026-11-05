@@ -1,8 +1,12 @@
-# Host <-> Device Protocol (v2)
+# Host <-> Device Protocol (v3)
 
 All multi-byte integers are **little-endian**. `f32` is IEEE-754 single precision.
 Strings inside payloads are **NUL-terminated** unless a fixed-size field is stated
 (fixed fields are NUL-padded).
+
+Changes from v2: `LIVE_SUBSCRIBE` selects spectrum taps and returns the spectrum point layout;
+the `GET_LIVE` / live stream payload ends with the detected genre and one 72-point spectrum per
+selected tap.
 
 Changes from v1: WiFi is station only (no soft-AP; settings 2, 5, 6, 7 removed), new
 `LIVE_SUBSCRIBE` UDP live stream (0x07), `GET_LIVE` payload starts with `t_ms` and carries
@@ -23,7 +27,7 @@ Changes from v1: WiFi is station only (no soft-AP; settings 2, 5, 6, 7 removed),
 * Every device answers (unicast, to the sender's address and port) with one ASCII line:
 
 ```
-LEDSTRIP proto=2 name=<device_name> ip=<a.b.c.d> port=4210 fw=<fw_version> mac=<aa:bb:cc:dd:ee:ff>
+LEDSTRIP proto=3 name=<device_name> ip=<a.b.c.d> port=4210 fw=<fw_version> mac=<aa:bb:cc:dd:ee:ff>
 ```
 
 * While connected to the network, devices also broadcast the same line, unsolicited, to
@@ -39,6 +43,23 @@ discard datagrams whose `seq` is not newer than the last one drawn.
 
 The subscription ends when the TCP client disconnects, sends `LIVE_SUBSCRIBE` with rate 0, or
 sends no request for **3 s** (lease). A host keeps it alive with `PING` about once per second.
+When it ends, the spectrum taps are cleared too.
+
+### 1.3 Spectrum taps
+
+A tap is a point in the processing pipeline whose signal spectrum the host wants to see: after
+stage id *n* (bit *n* of the tap mask) or after the last stage of the running algorithm
+(bit 15, `TAP_END`). The host chooses them with `LIVE_SUBSCRIBE`; the device keeps at most 4
+(lowest ids first). Per tap the real-time task only copies each block's samples into a
+256-sample ring; the comm task computes a 256-point Hann-windowed FFT per tap and frame, so taps
+cost no time in the mic -> light path and unrequested taps cost nothing. A tap whose stage is not
+in the running algorithm (or has no data yet) is left out of the payload.
+
+Each spectrum has 72 points, log spaced over FFT bins 1..128 with at least one bin per point:
+single bins (62.5 Hz apart at 16 kHz) up to about 3.9 kHz, groups of 4-8 bins above. A point is
+the mean power of its bins; a sine reads its own level. The layout is returned by
+`LIVE_SUBSCRIBE`; point centre frequency = geometric mean of its first and last bin, bin *k* at
+*k* x sample_rate / 256 Hz.
 
 ## 2. Framing
 
@@ -108,7 +129,7 @@ req: empty. resp (fixed 128 bytes):
 
 | Off | Type     | Field              |
 |-----|----------|--------------------|
-| 0   | u32      | proto_version (=2) |
+| 0   | u32      | proto_version (=3) |
 | 4   | u32      | build_flags        |
 | 8   | u8       | device_mode        |
 | 9   | u8       | run_mode           |
@@ -160,11 +181,20 @@ datagrams, section 1.2). req: empty. resp:
 | u16               | num_leds (L) |
 | u16[B]            | band levels (0..32767) |
 | u8[L*3]           | LED colours R,G,B as sent to the strip (after brightness/power limiting) |
+| u8                | genre: index into the music stage's `genre` enum (its option list in GET_STAGE_SCHEMA); 0 = none (the running algorithm has no music stage) |
+| u8                | num_spectra (S): spectra that follow, one per selected tap with data (section 1.3) |
+| S x { u8, u8, u8[n] } | `tap` (stage id, 15 = after the last stage), `n` points (72), then the points: value v = -120 + v / 2 dBFS (0.5 dB steps, 0 = -120 dBFS or less), unsmoothed |
+
+Hosts interpolate between the points for display; more points than FFT bins carry no extra
+information (that would need a larger FFT, which costs time resolution).
 
 ### 0x07 LIVE_SUBSCRIBE
-req: `u16 udp_port, u8 rate_hz, u8 reserved (0)`. Starts the live stream (section 1.2) to
-`udp_port` on the host's IP at `rate_hz` (clamped to 100). `rate_hz = 0` or `udp_port = 0`
-stops it. resp: `u8 applied_rate_hz` (0 = stopped).
+req: `u16 udp_port, u8 rate_hz, u8 reserved (0), u16 taps`. Starts the live stream (section
+1.2) to `udp_port` on the host's IP at `rate_hz` (clamped to 100) with the spectrum taps of
+section 1.3 (the 4-byte form without `taps` selects none). `rate_hz = 0` or `udp_port = 0`
+stops the stream and clears the taps. Send it again whenever the wanted taps change.
+resp: `u8 applied_rate_hz` (0 = stopped), `u16 taps_kept`, `u8 P` (points per spectrum, 72),
+`u8 edges[P + 1]` (point i covers FFT bins edges[i] .. edges[i+1] - 1).
 
 ### 0x10 GET_ALGORITHMS
 req: empty. resp: `u8 count`, then per algorithm:

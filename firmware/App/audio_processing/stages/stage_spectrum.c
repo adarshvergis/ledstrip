@@ -126,6 +126,8 @@ static void process(void *st, audio_frame_t *f)
         }
         c_den += pw;
         int32_t db = (dsp_power_to_db_q8(pw) - comp_q8) * 256;   /* dBFS Q16 */
+        int32_t db_q8 = db >> 8;
+        f->band_db[b] = (int16_t)(db_q8 < -32000 ? -32000 : db_q8);
 
         int32_t lo;
         if (s->normalize) {

@@ -39,6 +39,11 @@ typedef struct {
     uint16_t beat_count;
     uint16_t centroid;
     uint16_t bands[AUDIO_NUM_BANDS];
+    /* music show analysis (debug CLI only, not part of the protocol) */
+    uint8_t  scene, genre, bar_beat, voice;
+    uint16_t w_groove, w_lead, w_perc, w_ambient;
+    uint16_t clarity, intensity, build, salience;
+    int32_t  pitch_q8;
 } live_snapshot_t;
 
 typedef struct {

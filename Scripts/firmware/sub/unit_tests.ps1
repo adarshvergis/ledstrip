@@ -11,16 +11,20 @@ $out = Join-Path $BuildRoot "unit_tests"
 New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 $stages = "stage_envelope", "stage_agc", "stage_spectrum", "stage_beat", "stage_filter",
-          "stage_render_level", "stage_render_beat_flash", "stage_render_spectrum", "stage_render_beat_segments"
-$srcs = @("UnitTest/host/test_host.c",
+          "stage_render_beat_flash", "stage_render_spectrum", "stage_render_beat_segments",
+          "stage_melody", "stage_music", "stage_render_show"
+$srcs = @("UnitTest/host/test_host.c", "UnitTest/host/test_modules.c",
           "firmware/Interface/signal_processing/dsp.c", "firmware/Interface/signal_processing/dsp_fft.c",
-          "firmware/Interface/common/crc32.c", "firmware/Interface/led_patterns/led_color.c")
+          "firmware/Interface/common/crc32.c", "firmware/Interface/led_patterns/led_color.c",
+          "firmware/Interface/led_patterns/led_patterns.c", "firmware/Interface/config_manager/config_manager.c",
+          "firmware/Interface/cli/cli.c", "firmware/App/audio_processing/algorithms.c",
+          "firmware/App/audio_processing/music_profiles.c", "firmware/App/audio_processing/spectrum_taps.c")
 $srcs += $stages | ForEach-Object { "firmware/App/audio_processing/stages/$_.c" }
 
 Set-Location $Root
 $exe = "$out\test_host.exe"
 & gcc -std=gnu11 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare `
-    -Ifirmware/App -Ifirmware/App/audio_processing -Ifirmware/Interface/common -Ifirmware/Interface/signal_processing -Ifirmware/Interface/led_strip -Ifirmware/Interface/led_patterns `
+    -Ifirmware/App -Ifirmware/App/audio_processing -Ifirmware/Interface/common -Ifirmware/Interface/signal_processing -Ifirmware/Interface/led_strip -Ifirmware/Interface/led_patterns -Ifirmware/Interface/config_manager -Ifirmware/Interface/cli -IUnitTest/host/mocks `
     @srcs -lm -o $exe
 if ($LASTEXITCODE -ne 0) { Write-Host "BUILD OF UNIT TESTS FAILED"; exit $LASTEXITCODE }
 & $exe

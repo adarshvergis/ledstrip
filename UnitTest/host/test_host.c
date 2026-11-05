@@ -2,7 +2,7 @@
  * @file test_host.c
  * @brief Host (PC) sanity tests of the DSP library and the processing stages.
  *
- * Built with the native compiler by Scripts/run_host_tests.sh; feeds synthetic audio
+ * Built with the native compiler by Scripts/firmware/run_firmware_unit_tests.sh; feeds synthetic audio
  * (tones, kick-drum patterns) through the real stage code and checks the results.
  * Not a full unit-test suite - a quick regression net for the signal processing.
  */
@@ -14,6 +14,7 @@
 #include "audio_types.h"
 #include "hw_common.h"
 #include "led_color.h"
+#include "music_profiles.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -21,6 +22,8 @@
 
 static int s_fails;
 static int s_checks;
+
+int test_modules_run(int *checks, int *fails);     /* test_modules.c */
 
 #define CHECK(cond, ...)                                    \
     do {                                                    \
@@ -301,20 +304,6 @@ static void test_renderers(void)
     audio_frame_t f;
     frame_init(&f);
 
-    stage_defaults(&g_stage_render_level, p);
-    stage_start(&g_stage_render_level, p);
-    f.level = 30000;
-    g_stage_render_level.process(g_stage_render_level.state, &f);
-    int lit = 0;
-    for (int i = 0; i < LED_MAX_COUNT; i++) lit += (s_leds[i].r | s_leds[i].g | s_leds[i].b) != 0;
-    CHECK(lit == LED_MAX_COUNT, "level render: loud -> all %d LEDs on", lit);
-    f.level = 1000;
-    g_stage_render_level.process(g_stage_render_level.state, &f);   /* hold time */
-    for (int k = 0; k < 20; k++) g_stage_render_level.process(g_stage_render_level.state, &f);
-    lit = 0;
-    for (int i = 0; i < LED_MAX_COUNT; i++) lit += (s_leds[i].r | s_leds[i].g | s_leds[i].b) != 0;
-    CHECK(lit == 0, "level render: quiet -> all off (%d lit)", lit);
-
     stage_defaults(&g_stage_render_spectrum, p);
     stage_start(&g_stage_render_spectrum, p);
     memset(f.bands, 0, sizeof(f.bands));
@@ -342,6 +331,320 @@ static void test_renderers(void)
     CHECK(first == 0 && last > 0 && last < 15, "beat segments: bassy beat lights LEDs %d..%d", first, last);
 }
 
+/* ========================================================================== */
+/*  Music show: melody, music analysis, render show                          */
+/* ========================================================================== */
+
+static const stage_def_t *const s_show_chain[] = {
+    &g_stage_envelope, &g_stage_agc, &g_stage_spectrum, &g_stage_beat,
+    &g_stage_melody, &g_stage_music, &g_stage_render_show,
+};
+#define SHOW_N  ((int)(sizeof(s_show_chain) / sizeof(s_show_chain[0])))
+
+static float s_show_genre = GENRE_AUTO;
+
+static void show_start(void)
+{
+    for (int i = 0; i < SHOW_N; i++) {
+        float p[STAGE_MAX_PARAMS];
+        stage_defaults(s_show_chain[i], p);
+        if (s_show_chain[i] == &g_stage_music) p[MUSIC_P_GENRE] = s_show_genre;
+        stage_start(s_show_chain[i], p);
+    }
+}
+
+static void show_block(audio_frame_t *f)
+{
+    f->beat = false;
+    f->beat_strength = 0;
+    f->spectrum_valid = false;
+    for (int i = 0; i < SHOW_N; i++) s_show_chain[i]->process(s_show_chain[i]->state, f);
+}
+
+static int lit_count(void)
+{
+    int lit = 0;
+    for (int i = 0; i < LED_MAX_COUNT; i++) lit += (s_leds[i].r | s_leds[i].g | s_leds[i].b) > 8;
+    return lit;
+}
+
+static const char *const s_scene_names[SCENE_COUNT] = {"silence", "ambient", "groove", "build", "drop", "fill", "lead"};
+
+/* SHOW_DEBUG=1 prints the analysis every 100 ms */
+static void show_trace(const audio_frame_t *f, double t)
+{
+    if (!getenv("SHOW_DEBUG")) return;
+    const music_t *m = &f->music;
+    printf("      t=%6.2f %-7s g=%.2f l=%.2f p=%.2f a=%.2f clar=%.2f int=%.2f bld=%.2f bpm=%5.1f conf=%.2f "
+           "sal=%.2f %s pitch=%5.1f hits=%02x %s lit=%d\n",
+           t, s_scene_names[m->scene], m->w_groove / 32767.0, m->w_lead / 32767.0, m->w_perc / 32767.0,
+           m->w_ambient / 32767.0, m->clarity / 32767.0, m->intensity / 32767.0, m->build / 32767.0,
+           f->bpm_x10 / 10.0, f->tempo_conf / 32767.0, f->melody.salience / 32767.0, f->melody.active ? "ON " : "off",
+           f->melody.pitch_q8 / 256.0, m->hits, music_profile(m->genre)->name, lit_count());
+}
+
+/* A plucked / sung note with harmonics. */
+static double note_wave(double t, double midi, double amp)
+{
+    double f0 = 440.0 * pow(2.0, (midi - 69.0) / 12.0);
+    double v = 0;
+    for (int h = 1; h <= 4; h++) v += sin(2 * M_PI * f0 * h * t) / (h * h);
+    return amp * v;
+}
+
+static const double s_tune[] = {69, 72, 76, 74, 71, 67, 72, 79};    /* lead line, 220 ms per note */
+#define NOTE_LEN    0.22
+
+/* legato line: each note fades in over 10 ms while the previous one fades out over 20 ms */
+static double lead_line(double t, int *note_idx)
+{
+    int k = (int)(t / NOTE_LEN);
+    double tn = t - k * NOTE_LEN;
+    if (note_idx) *note_idx = k;
+    double env = (tn < 0.01 ? tn / 0.01 : 1.0) * exp(-tn / 0.6);
+    double v = note_wave(t, s_tune[k % 8], 0.25 * env);
+    if (k > 0 && tn < 0.02) v += note_wave(t, s_tune[(k - 1) % 8], 0.25 * exp(-NOTE_LEN / 0.6) * (1.0 - tn / 0.02));
+    return v;
+}
+
+static double tom_hit(double tb, double f0)
+{
+    return 0.5 * exp(-tb / 0.08) * sin(2 * M_PI * f0 * (1 + 0.3 * exp(-tb / 0.02)) * tb) +
+           0.08 * frand() * exp(-tb / 0.02);
+}
+
+static void test_melody(void)
+{
+    printf("Melody tracker (harmonic notes)\n");
+    float p[STAGE_MAX_PARAMS];
+    stage_defaults(&g_stage_melody, p);
+    stage_start(&g_stage_melody, p);
+    audio_frame_t f;
+    frame_init(&f);
+    int n = 0, notes = 0, doubles = 0, last_note = -1, active_blocks = 0, blocks = 0;
+    double max_err = 0;
+    for (int blk = 0; blk < 8 * 55; blk++) {                       /* 8 notes */
+        int idx = 0;
+        for (int i = 0; i < AUDIO_HOP_SIZE; i++, n++) {
+            f.samples[i] = to_q31(lead_line((double)n / SAMPLE_RATE, &idx) + 1e-4 * frand());
+        }
+        g_stage_melody.process(g_stage_melody.state, &f);
+        double tn = (double)n / SAMPLE_RATE - idx * NOTE_LEN;
+        if (f.melody.note_on) {
+            notes++;
+            if (idx == last_note) doubles++;                       /* two starts in one note */
+            last_note = idx;
+        }
+        if (tn > 0.08 && tn < 0.2) {
+            blocks++;
+            if (f.melody.active) {
+                active_blocks++;
+                double e = fabs(f.melody.pitch_q8 / 256.0 - s_tune[idx % 8]);
+                if (e > max_err) max_err = e;
+            }
+        }
+    }
+    CHECK(notes >= 7 && notes <= 9 && doubles == 0, "%d note starts for 8 notes (%d double)", notes, doubles);
+    CHECK(active_blocks >= blocks * 9 / 10, "voice active in %d/%d mid-note blocks", active_blocks, blocks);
+    CHECK(max_err < 0.5, "pitch error max %.2f semitones", max_err);
+
+    /* drums only: no voice */
+    stage_start(&g_stage_melody, p);
+    int act = 0;
+    n = 0;
+    for (int blk = 0; blk < 1000; blk++) {
+        for (int i = 0; i < AUDIO_HOP_SIZE; i++, n++) {
+            double t = (double)n / SAMPLE_RATE;
+            double th = fmod(t, 0.125);
+            f.samples[i] = to_q31(tom_hit(fmod(t, 0.25), 120) + 0.1 * frand() * exp(-th / 0.02));
+        }
+        g_stage_melody.process(g_stage_melody.state, &f);
+        act += f.melody.active;
+    }
+    CHECK(act < 100, "drums only: voice active in %d/1000 blocks", act);
+}
+
+typedef double (*show_gen_t)(int n);
+
+typedef struct {
+    int blocks;
+    int scene[SCENE_COUNT];
+    int beat_full, beat_partial;        /* LEDs lit two blocks after a beat */
+    int max_lit;
+    double w_groove, w_lead, w_perc;
+} show_stats_t;
+
+static audio_frame_t s_show_f;
+static int s_show_n;
+
+static void show_reset(void)
+{
+    show_start();
+    frame_init(&s_show_f);
+    s_show_n = 0;
+}
+
+/* Continue the show for @p seconds of @p gen; statistics over the part after @p skip seconds. */
+static void show_run(show_gen_t gen, double seconds, double skip, show_stats_t *st)
+{
+    memset(st, 0, sizeof(*st));
+    int blocks = (int)(seconds * SAMPLE_RATE / AUDIO_HOP_SIZE);
+    int pending = 0;
+    for (int blk = 0; blk < blocks; blk++) {
+        for (int i = 0; i < AUDIO_HOP_SIZE; i++, s_show_n++) s_show_f.samples[i] = to_q31(gen(s_show_n));
+        show_block(&s_show_f);
+        if ((blk % 25) == 0) show_trace(&s_show_f, (double)s_show_n / SAMPLE_RATE);
+        if (s_show_f.beat && getenv("HIT_DEBUG")) {
+            printf("        BEAT t=%6.3f%s str=%.2f bar=%u\n", (double)s_show_n / SAMPLE_RATE,
+                   s_show_f.beat_predicted ? " (flywheel)" : "", s_show_f.beat_strength / 32767.0,
+                   s_show_f.music.bar_beat);
+        }
+        if (s_show_f.music.hits && getenv("HIT_DEBUG")) {
+            static const char *const hn[HIT_COUNT] = {"kick", "tom", "snare", "hat", "crash"};
+            printf("        hit t=%6.3f", (double)s_show_n / SAMPLE_RATE);
+            for (int h = 0; h < HIT_COUNT; h++) {
+                if (s_show_f.music.hits & (1u << h)) printf(" %s(%.2f)", hn[h], s_show_f.music.hit_strength[h] / 32767.0);
+            }
+            printf(" sal=%.2f %s\n", s_show_f.melody.salience / 32767.0, s_show_f.melody.active ? "voice" : "");
+        }
+        if (blk < skip * SAMPLE_RATE / AUDIO_HOP_SIZE) continue;
+        const music_t *m = &s_show_f.music;
+        st->blocks++;
+        st->scene[m->scene]++;
+        st->w_groove += m->w_groove / 32767.0;
+        st->w_lead += m->w_lead / 32767.0;
+        st->w_perc += m->w_perc / 32767.0;
+        int lit = lit_count();
+        if (lit > st->max_lit) st->max_lit = lit;
+        if (pending && --pending == 0) {
+            if (lit >= LED_MAX_COUNT - 2) st->beat_full++;
+            else if (lit > 0) st->beat_partial++;
+        }
+        if (s_show_f.beat) pending = 2;
+    }
+    if (st->blocks) {
+        st->w_groove /= st->blocks;
+        st->w_lead /= st->blocks;
+        st->w_perc /= st->blocks;
+    }
+}
+
+static double gen_groove(int n) { return synth(n, 128.0, NULL); }
+
+static double gen_lead(int n) { return lead_line((double)n / SAMPLE_RATE, NULL) + 0.002 * frand(); }
+
+/* groove; from 8 to 9 s the kick and hats stop for a fill of descending 16th-note toms */
+static double gen_fill(int n)
+{
+    double t = (double)n / SAMPLE_RATE;
+    if (t >= 8.0 && t < 9.0) {
+        double sx = 60.0 / 128.0 / 4.0;
+        int k = (int)((t - 8.0) / sx);
+        static const double toms[] = {220, 180, 150, 120};
+        return tom_hit(t - 8.0 - k * sx, toms[(k / 2) % 4]) + 0.002 * frand();
+    }
+    return synth(n, 128.0, NULL);
+}
+
+/* EDM-like: groove, an 8 s build-up with rising noise and a speeding snare roll (no kick),
+ * then the drop: the groove comes back with a heavier kick */
+static double gen_build_drop(int n)
+{
+    double t = (double)n / SAMPLE_RATE;
+    double beat = 60.0 / 128.0;
+    if (t < 8.0) return 0.6 * synth(n, 128.0, NULL);
+    if (t < 16.0) {
+        double r = (t - 8.0) / 8.0;
+        double tb = fmod(t, beat / (r < 0.5 ? 2.0 : 4.0));
+        double snare = 0.15 * r * frand() * exp(-tb / 0.03);
+        double chord = 0.03 * (sin(2 * M_PI * 220 * t) + sin(2 * M_PI * 330 * t));
+        return 0.12 * r * r * frand() + snare + chord;
+    }
+    double tk = fmod(t, beat);
+    return synth(n, 128.0, NULL) + 0.4 * exp(-tk / 0.07) * sin(2 * M_PI * 50 * tk);
+}
+
+static double gen_silence(int n) { (void)n; return 0.0; }
+
+/* Trap: 808 (long 50 Hz tail) every 2 beats at 140 BPM, clap on 3, 16th hats with a
+ * 32nd roll on the last beat of the bar */
+static double gen_trap(int n)
+{
+    double t = (double)n / SAMPLE_RATE;
+    double beat = 60.0 / 140.0;
+    double tk = fmod(t, 2 * beat);
+    double k808 = 0.6 * exp(-tk / 0.45) * sin(2 * M_PI * (50 + 30 * exp(-tk / 0.02)) * tk);
+    double tc = fmod(t + 2 * beat, 4 * beat);
+    double clap = tc < 0.05 ? 0.25 * frand() * exp(-tc / 0.015) : 0.0;
+    int step16 = (int)(fmod(t, 4 * beat) / (beat / 4));
+    double th = fmod(t, step16 >= 12 ? beat / 8 : beat / 4);
+    static double prev;                                            /* hats: high-passed noise */
+    double nz = frand(), hp = nz - prev;
+    prev = nz;
+    double hat = 0.06 * hp * exp(-th / 0.008);
+    return k808 + clap + hat + 0.002 * frand();
+}
+
+static void test_music_show(void)
+{
+    printf("Music show (scenes, all/some LEDs, genre)\n");
+    show_stats_t st;
+    s_show_genre = GENRE_AUTO;
+
+    show_reset();
+    show_run(gen_groove, 16.0, 6.0, &st);
+    CHECK(st.scene[SCENE_GROOVE] > st.blocks * 8 / 10, "groove: GROOVE scene %d/%d blocks (w_groove %.2f)",
+          st.scene[SCENE_GROOVE], st.blocks, st.w_groove);
+    CHECK(st.beat_full > 0 && st.beat_partial > 0, "groove: beats light all LEDs %d x and some LEDs %d x",
+          st.beat_full, st.beat_partial);
+
+    show_reset();
+    show_run(gen_lead, 6.0, 1.5, &st);
+    CHECK(st.scene[SCENE_LEAD] > st.blocks * 8 / 10 && st.w_groove < 0.2,
+          "lead only: LEAD scene %d/%d blocks, w_groove %.2f, w_lead %.2f", st.scene[SCENE_LEAD], st.blocks,
+          st.w_groove, st.w_lead);
+    CHECK(st.max_lit <= 12, "lead only: at most %d LEDs lit (sparks, not the whole strip)", st.max_lit);
+
+    show_reset();
+    show_run(gen_fill, 8.3, 0.0, &st);
+    show_stats_t fill;
+    show_run(gen_fill, 0.7, 0.0, &fill);
+    CHECK(fill.scene[SCENE_FILL] > fill.blocks * 7 / 10, "fill: FILL scene %d/%d blocks from 0.3 s into the fill",
+          fill.scene[SCENE_FILL], fill.blocks);
+    show_run(gen_fill, 4.0, 2.0, &st);
+    CHECK(st.scene[SCENE_GROOVE] > st.blocks * 8 / 10, "fill: back to GROOVE after the fill (%d/%d)",
+          st.scene[SCENE_GROOVE], st.blocks);
+
+    show_reset();
+    show_run(gen_build_drop, 16.0, 13.0, &st);
+    CHECK(st.scene[SCENE_BUILD] > st.blocks / 2, "build: BUILD scene %d/%d blocks in the last 3 s of an 8 s build-up",
+          st.scene[SCENE_BUILD], st.blocks);
+    show_run(gen_build_drop, 3.0, 0.2, &st);
+    CHECK(st.scene[SCENE_DROP] > st.blocks * 7 / 10, "drop: DROP scene %d/%d blocks after the bass returns",
+          st.scene[SCENE_DROP], st.blocks);
+
+    show_reset();
+    show_run(gen_silence, 3.0, 1.0, &st);
+    CHECK(st.max_lit == 0 && st.scene[SCENE_SILENCE] == st.blocks, "silence: dark (%d lit), SILENCE scene",
+          st.max_lit);
+
+    show_reset();
+    show_run(gen_groove, 30.0, 29.0, &st);
+    CHECK(s_show_f.music.genre == GENRE_EDM, "auto genre: 128 BPM four-on-the-floor -> %s",
+          music_profile(s_show_f.music.genre)->name);
+    show_reset();
+    show_run(gen_trap, 30.0, 29.0, &st);
+    CHECK(s_show_f.music.genre == GENRE_TRAP, "auto genre: 808 + hi-hat rolls -> %s",
+          music_profile(s_show_f.music.genre)->name);
+
+    s_show_genre = GENRE_ROCK;
+    show_reset();
+    show_run(gen_groove, 2.0, 1.0, &st);
+    CHECK(s_show_f.music.genre == GENRE_ROCK, "fixed genre parameter is used (%s)",
+          music_profile(s_show_f.music.genre)->name);
+    s_show_genre = GENRE_AUTO;
+}
+
 int main(void)
 {
     srand(1234);
@@ -354,6 +657,9 @@ int main(void)
     test_spectrum();
     test_beat();
     test_renderers();
+    test_melody();
+    test_music_show();
+    test_modules_run(&s_checks, &s_fails);
     printf("\n%d checks, %d failed\n", s_checks, s_fails);
     return s_fails ? 1 : 0;
 }

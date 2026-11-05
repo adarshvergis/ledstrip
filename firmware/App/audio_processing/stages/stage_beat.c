@@ -267,6 +267,7 @@ static void process(void *st, audio_frame_t *f)
         int32_t st_q15 = (int32_t)(((int64_t)odf * 16384) / thr);     /* thr -> 0.5 */
         strength = (uint16_t)(st_q15 > 32767 ? 32767 : st_q15);
     }
+    const uint16_t onset_strength = strength;
 
     if (onset && s->t_q8 >= s->min_interval_q8) {
         if (!locked) {
@@ -325,6 +326,10 @@ static void process(void *st, audio_frame_t *f)
     f->beat = emit;
     f->beat_strength = emit ? strength : 0;
     f->beat_count = s->beat_count;
+    f->beat_predicted = emit && predicted;
+    f->bass_onset = onset;
+    f->bass_onset_strength = onset_strength;
+    f->tempo_conf = s->confidence;
     f->bpm_x10 = (s->period_q8 && s->confidence >= 4000)
                  ? (uint16_t)((uint32_t)(600.0f * BLOCK_RATE_HZ * Q8) / s->period_q8) : 0;
     if (s->period_q8) {

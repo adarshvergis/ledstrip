@@ -7,14 +7,18 @@
  */
 #include "pipeline.h"
 
-/* 0: all LEDs turn on/off with the amplitude */
-static const stage_def_t *const s_algo_amplitude_all[] = {
+/* 0: scene-aware show: the beat drives all / some LEDs while the beat is clear, the
+ *    lead voice draws note sparks, drum fills / breaks / build-ups get their own visuals */
+static const stage_def_t *const s_algo_music_show[] = {
     &g_stage_frontend,
     &g_stage_filter_a,
-    &g_stage_filter_b,
     &g_stage_envelope,
     &g_stage_agc,
-    &g_stage_render_level,
+    &g_stage_spectrum,
+    &g_stage_beat,
+    &g_stage_melody,
+    &g_stage_music,
+    &g_stage_render_show,
 };
 
 /* 1: all LEDs turn on/off on the main beat (bass onsets + tempo tracking) */
@@ -54,8 +58,9 @@ static const stage_def_t *const s_algo_beat_segments[] = {
     [id_] = {(id_), (name_), (desc_), (arr_), (uint8_t)(sizeof(arr_) / sizeof((arr_)[0]))}
 
 const algorithm_def_t g_algorithms[NUM_ALGORITHMS] = {
-    ALGO(ALGO_AMPLITUDE_ALL, "Amplitude (all LEDs)",
-         "All LEDs switch on/off (or dim) with the sound level", s_algo_amplitude_all),
+    ALGO(ALGO_MUSIC_SHOW, "Music show",
+         "Beat (all / some LEDs), lead notes, drum fills, build-ups and drops; genre profiles",
+         s_algo_music_show),
     ALGO(ALGO_BEAT_ALL, "Beat (all LEDs)",
          "All LEDs switch on with the main beat (tempo locked)", s_algo_beat_all),
     ALGO(ALGO_SPECTRUM_BARS, "Spectrum bars",

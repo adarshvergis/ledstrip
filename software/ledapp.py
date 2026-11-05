@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import math
 import queue
 import select
 import socket
@@ -38,15 +39,16 @@ from typing import Any, Callable
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from ledhost import protocol as P  # noqa: E402
+from ledhost.dsp import biquad_db, pchip  # noqa: E402
 from ledhost.protocol import BuildFlag, Cmd, DeviceMode, ParamType  # noqa: E402
 
 SETTINGS_FILE = Path(__file__).resolve().parent / "ledapp_settings.json"
-DEFAULT_HOST_SETTINGS = {"device": "", "live_hz": 60, "debug_mode": False}
+DEFAULT_HOST_SETTINGS = {"device": "", "live_hz": 60, "debug_mode": False, "filter_overlay": False,
+                         "processed_overlay": False}
 KEEPALIVE_S = 1.0           # < firmware NET_LIVE_LEASE_MS (3 s)
 RECONNECT_S = 2.0
 PARAM_DEBOUNCE_MS = 60
 FRAME_MS = 15
-AUDIO_BANDS_DEFAULT = 12    # spectrum slots drawn before the first frame arrives
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +116,8 @@ class Worker(threading.Thread):
         self.next_try = 0.0
         self.on_connect: Callable[[Link], Any] | None = None   # runs in this thread
         self.log_requests = False
+        self.live_taps = 0                                      # spectrum taps to subscribe
+        self.on_layout: Callable[[P.SpectrumLayout], None] | None = None
 
     # -- called from the UI thread --------------------------------------------
 
@@ -186,7 +190,9 @@ class Worker(threading.Thread):
                 self._drop(f"link lost: {e}")
 
     def request_live(self, link: Link) -> None:
-        link.request(Cmd.LIVE_SUBSCRIBE, P.build_live_subscribe(self.live_port, self.live_hz))
+        body = link.request(Cmd.LIVE_SUBSCRIBE, P.build_live_subscribe(self.live_port, self.live_hz, self.live_taps))
+        if self.on_layout:
+            self.post(self.on_layout, P.SpectrumLayout.decode(body))
 
     def _drop(self, why: str) -> None:
         if self.link is not None:
@@ -318,6 +324,7 @@ FONT = ("Segoe UI", 10)
 FONT_SM = ("Segoe UI", 9)
 FONT_H = ("Segoe UI Semibold", 11)
 FONT_NUM = ("Segoe UI Semibold", 28)
+FONT_GENRE = ("Segoe UI Semibold", 18)
 FONT_MONO = ("Consolas", 10)
 
 
@@ -326,6 +333,16 @@ def mix(c1: str, c2: str, t: float) -> str:
     a, b = int(c1[1:], 16), int(c2[1:], 16)
     ch = [round(((a >> s) & 255) * (1 - t) + ((b >> s) & 255) * t) for s in (16, 8, 0)]
     return "#%02x%02x%02x" % tuple(ch)
+
+
+# ---------------------------------------------------------------------------
+# Spectrum view helpers
+# ---------------------------------------------------------------------------
+
+SPEC_DB_RANGE = (-100.0, 0.0)       # left axis, dBFS of the device's FFT bins
+FILTER_DB_RANGE = (-36.0, 12.0)     # right axis, filter overlay gain
+FREQ_TICKS = (50, 100, 200, 500, 1000, 2000, 5000)
+FILTER_COLORS = ("#f5b14c", "#ff6db0", "#4cc9f0", "#c38bff")   # one per filter overlay
 
 
 def apply_theme(root: tk.Tk) -> None:
@@ -470,6 +487,7 @@ class App:
         self.worker = Worker(self.results, self.live.port)
         self.worker.live_hz = int(self.cfg["live_hz"])
         self.worker.on_connect = self._fetch_on_connect
+        self.worker.on_layout = self._on_layout
         self.worker._status_cb = self._on_link_status
         self.live.start()
         self.worker.start()
@@ -490,8 +508,17 @@ class App:
         self.beat_until = 0.0
         self.loaded_settings: dict[int, int | str] = {}
 
-        self.band_disp: list[float] = []
-        self.band_peak: list[float] = []
+        self.active_algo = 0
+        self.shown_genre = -1
+        self.spec_ok = False
+        self.filt_items: list[int] = []
+        self.filt_on = tk.BooleanVar(value=bool(self.cfg["filter_overlay"]))
+        self.proc_on = tk.BooleanVar(value=bool(self.cfg["processed_overlay"]))
+        self.filt_curves: dict[int, int] = {}
+        self.tap_state: dict[int, tuple[list[float], list[float]]] = {}
+        self.spec_layout: P.SpectrumLayout | None = None
+        self.spec_logf: list[float] = []
+        self.q0 = 0
 
         root.title("LED Strip")
         root.geometry("1180x760")
@@ -571,7 +598,7 @@ class App:
         self.cv = tk.Canvas(self.live_card, background=C["panel"], highlightthickness=0)
         self.cv.pack(fill="both", expand=True, padx=4, pady=4)
         self.cv.bind("<Configure>", lambda e: self._layout_live())
-        self.led_items: list[tuple[int, int]] = []
+        self.led_items: list[int] = []
         self.led_colors: list[str] = []
         self.band_items: list[tuple[int, int]] = []
         self.stats_item = self.cv.create_text(0, 0, text="")    # replaced by _layout_live
@@ -581,10 +608,18 @@ class App:
         self.side = side
         g = ttk.Frame(side, style="Card.TFrame")
         g.pack(fill="x")
-        g.columnconfigure(0, weight=1)
-        ttk.Label(g, text="Source", style="Card.Muted.TLabel").grid(row=0, column=0, sticky="w")
-        seg = ttk.Frame(g, style="Card.TFrame")
-        seg.grid(row=1, column=0, sticky="ew", pady=(4, 14))
+        self.ctl_grid = g
+
+        def section(label: str) -> ttk.Frame:
+            f = ttk.Frame(g, style="Card.TFrame")
+            f.columnconfigure(0, weight=1)
+            if label:
+                ttk.Label(f, text=label, style="Card.Muted.TLabel").grid(row=0, column=0, sticky="w")
+            return f
+
+        src = section("Source")
+        seg = ttk.Frame(src, style="Card.TFrame")
+        seg.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         seg.columnconfigure((0, 1), weight=1, uniform="seg")
         self.run_mode_var = tk.IntVar(value=0)
         self.seg_btns = [ttk.Button(seg, text=t, command=lambda m=m: self._set_run_mode(m))
@@ -593,30 +628,33 @@ class App:
             b.grid(row=0, column=i, sticky="ew", padx=(0, 4) if i == 0 else (4, 0))
         self._update_seg()
 
-        ttk.Label(g, text="Algorithm", style="Card.Muted.TLabel").grid(row=2, column=0, sticky="w")
-        self.algo_combo = ttk.Combobox(g, state="readonly")
-        self.algo_combo.grid(row=3, column=0, sticky="ew", pady=(4, 14))
+        alg = section("Algorithm")
+        self.algo_combo = ttk.Combobox(alg, state="readonly")
+        self.algo_combo.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.algo_combo.bind("<<ComboboxSelected>>",
-                             lambda e: self._run_config(algorithm=self.algo_combo.current()))
-        ttk.Label(g, text="Pattern", style="Card.Muted.TLabel").grid(row=4, column=0, sticky="w")
-        self.pattern_var = tk.IntVar(value=0)
-        self.pattern_spin = ttk.Spinbox(g, from_=0, to=0, textvariable=self.pattern_var, width=6,
-                                        command=lambda: self._run_config(pattern=self.pattern_var.get()))
-        self.pattern_spin.grid(row=5, column=0, sticky="w", pady=(4, 14))
+                             lambda e: self._select_algorithm(self.algo_combo.current()))
 
-        bh = ttk.Frame(g, style="Card.TFrame")
-        bh.grid(row=6, column=0, sticky="ew")
+        pat = section("Pattern")
+        self.pattern_var = tk.IntVar(value=0)
+        self.pattern_spin = ttk.Spinbox(pat, from_=0, to=0, textvariable=self.pattern_var, width=6,
+                                        command=lambda: self._run_config(pattern=self.pattern_var.get()))
+        self.pattern_spin.grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+        bri_sec = section("")
+        bh = ttk.Frame(bri_sec, style="Card.TFrame")
+        bh.grid(row=0, column=0, sticky="ew")
         ttk.Label(bh, text="Brightness", style="Card.Muted.TLabel").pack(side="left")
         self.bri_var = tk.IntVar(value=0)
         self.bri_label = ttk.Label(bh, text="0%", style="Card.Muted.TLabel")
         self.bri_label.pack(side="right")
-        bri = ttk.Scale(g, from_=0, to=254, variable=self.bri_var, style="Card.Horizontal.TScale",   # 255 = "unchanged"
+        bri = ttk.Scale(bri_sec, from_=0, to=254, variable=self.bri_var, style="Card.Horizontal.TScale",
                         command=lambda v: self.bri_label.configure(text=f"{round(float(v) / 2.54)}%"))
-        bri.grid(row=7, column=0, sticky="ew", pady=(6, 18))
+        bri.grid(row=1, column=0, sticky="ew", pady=(10, 4))          # 255 = "unchanged", so 0..254
         bri.bind("<ButtonRelease-1>", lambda e: self._run_config(brightness=int(self.bri_var.get())))
 
-        lv = ttk.Frame(g, style="Card.TFrame")
-        lv.grid(row=8, column=0, sticky="ew")
+        view = section("")
+        lv = ttk.Frame(view, style="Card.TFrame")
+        lv.grid(row=0, column=0, sticky="ew")
         self.live_on = tk.BooleanVar(value=True)
         ttk.Checkbutton(lv, text="Live view", variable=self.live_on, style="Card.TCheckbutton",
                         command=self._toggle_live).pack(side="left")
@@ -624,6 +662,11 @@ class App:
                             width=7)
         rate.pack(side="right")
         rate.bind("<<ComboboxSelected>>", lambda e: self._set_rate())
+        ttk.Checkbutton(view, text="After processing", variable=self.proc_on, style="Card.TCheckbutton",
+                        command=self._overlays_changed).grid(row=1, column=0, sticky="w", pady=(10, 0))
+        ttk.Checkbutton(view, text="Filter overlay", variable=self.filt_on, style="Card.TCheckbutton",
+                        command=self._overlays_changed).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.ctl_sections = [src, alg, pat, bri_sec, view]
 
         self.main_wide: bool | None = None
         tab.bind("<Configure>", self._relayout_main)
@@ -637,6 +680,16 @@ class App:
         self.live_card.grid_forget()
         self.side.grid_forget()
         tab = self.main_tab
+        # controls: one column in the side panel, two columns when stacked under the live view
+        g = self.ctl_grid
+        for sec in self.ctl_sections:
+            sec.grid_forget()
+        cols = 1 if wide else 2
+        for c in range(2):
+            g.columnconfigure(c, weight=1 if c < cols else 0, uniform="ctl" if c < cols else "")
+        for i, sec in enumerate(self.ctl_sections):
+            r, c = divmod(i, cols)
+            sec.grid(row=r, column=c, sticky="ew", pady=(0, 14), padx=(0, 16) if (cols == 2 and c == 0) else 0)
         if wide:
             self.live_card.grid(row=0, column=0, sticky="nsew")
             self.side.grid(row=0, column=1, sticky="ns", padx=(16, 0))
@@ -900,6 +953,8 @@ class App:
             dbg["settings"] = P.decode_settings(link.request(Cmd.GET_SETTINGS))
         if info.has(BuildFlag.ENABLE_SELF_DIAGNOSTICS):
             dbg["diag"] = P.decode_diag(link.request(Cmd.GET_DIAG).decode("utf-8", "replace"))
+        algo = algs[info.active_algorithm] if info.active_algorithm < len(algs) else None
+        self.worker.live_taps = self._wanted_taps(algo, schemas, values)
         self.live.reset()
         self.worker.post(self._connected, info, algs, schemas, values, dbg)
 
@@ -923,6 +978,7 @@ class App:
         self.algo_combo.configure(values=[a.name for a in algs])
         if info.active_algorithm < len(algs):
             self.algo_combo.current(info.active_algorithm)
+        self.active_algo = info.active_algorithm
         self.pattern_spin.configure(to=max(0, info.num_patterns - 1))
         self.pattern_var.set(info.active_pattern)
         self.bri_var.set(min(info.brightness, 254))
@@ -971,14 +1027,18 @@ class App:
     def _run_config(self, **kw: int) -> None:
         self.call(Cmd.SET_RUN_CONFIG, P.build_set_run_config(**kw))
 
+    def _select_algorithm(self, idx: int) -> None:
+        self.active_algo = idx
+        self._run_config(algorithm=idx)
+        self._draw_filters()            # overlays follow the running algorithm's filters
+        self._subscribe()
+
     def _set_rate(self) -> None:
         self.cfg["live_hz"] = self.worker.live_hz = int(self.rate_var.get().split()[0])
-        self._toggle_live()
+        self._subscribe()
 
     def _toggle_live(self) -> None:
-        hz = self.worker.live_hz if self.live_on.get() else 0
-        self.call(Cmd.LIVE_SUBSCRIBE, P.build_live_subscribe(self.live.port, hz))
-        self.live.reset()
+        self._subscribe()
 
     # Live view geometry is computed on resize; per frame only colours and coordinates change.
 
@@ -1008,7 +1068,7 @@ class App:
             x -= 3 * 6 + 18
         self.stats_item = cv.create_text(x, p, text="", fill=C["faint"], font=FONT_SM, anchor="e")
 
-        # strip: round LEDs with a glow on a rail; wraps into rows on narrow windows
+        # strip: square LEDs with a glow on a rail; wraps into rows on narrow windows
         per_row = max(1, int(avail // 16))
         rows = -(-n // per_row)
         per_row = -(-n // rows)
@@ -1016,26 +1076,29 @@ class App:
         row_h = s * 1.25
         x0 = p + (avail - per_row * s) / 2 + s / 2
         y0 = p + 34 + s / 2
-        core, glow = s * 0.34, s * 0.48
+        core = s * 0.36
         self.led_items = []
         for r in range(rows):
             cnt = min(per_row, n - r * per_row)
             y = y0 + r * row_h
-            cv.create_line(x0, y, x0 + (cnt - 1) * s, y, width=s * 0.96 + 4, capstyle="round", fill=C["bg"])
+            cv.create_rectangle(x0 - s / 2, y - s / 2, x0 + (cnt - 0.5) * s, y + s / 2, fill=C["bg"], width=0)
             for i in range(cnt):
                 cx = x0 + i * s
-                g = cv.create_oval(cx - glow, y - glow, cx + glow, y + glow, fill=C["bg"], width=0)
-                c = cv.create_oval(cx - core, y - core, cx + core, y + core, fill=C["socket"], width=0)
-                self.led_items.append((g, c))
+                self.led_items.append(cv.create_rectangle(cx - core, y - core, cx + core, y + core,
+                                                          fill=C["socket"], width=0))
         self.led_colors = [""] * n
         y = y0 + (rows - 1) * row_h + s / 2 + 36
 
-        # readouts: BPM with a beat pulse | level and tone meters
+        # readouts: tempo with a beat pulse | genre | level and tone meters
         cv.create_text(p, y, text="TEMPO  ·  BPM", fill=C["faint"], font=FONT_SM, anchor="w")
         self.bpm_item = cv.create_text(p, y + 34, text="--", fill=C["text"], font=FONT_NUM, anchor="w")
         self.beat_item = cv.create_oval(p + 112, y + 28, p + 124, y + 40, fill=C["socket"], width=0)
-        mx0 = p + 200 if avail >= 480 else p
-        my = y if avail >= 480 else y + 80
+        cv.create_text(p + 160, y, text="GENRE", fill=C["faint"], font=FONT_SM, anchor="w")
+        self.genre_item = cv.create_text(p + 160, y + 34, text="--", fill=C["muted"], font=FONT_GENRE, anchor="w")
+        self.shown_genre = -1
+        wide = avail >= 640
+        mx0 = p + 340 if wide else p
+        my = y if wide else y + 80
         mx1 = w - p
         cv.create_text(mx0, my, text="LEVEL", fill=C["faint"], font=FONT_SM, anchor="w")
         cv.create_line(mx0 + 4, my + 22, mx1 - 4, my + 22, width=8, capstyle="round", fill=C["panel2"])
@@ -1048,32 +1111,217 @@ class App:
         self.meter_x = (mx0 + 4, mx1 - 4)
         self.meter_y = (my + 22, my + 66)
 
-        # spectrum: gradient bars on tracks with peak-hold caps
-        top = max(y + 84, my + 92)
-        bottom = h - p
-        nb = len(self.drawn_frame.bands) if self.drawn_frame else AUDIO_BANDS_DEFAULT
-        self.band_items = []
-        self.band_geom = (top + 22, bottom)
-        self.band_bw = 0.0
-        if bottom - top > 60 and nb:
-            cv.create_text(p, top, text="SPECTRUM", fill=C["faint"], font=FONT_SM, anchor="w")
-            slot = avail / nb
-            bw = max(3.0, min(slot * 0.55, 26.0))
-            for b in range(nb):
-                bx = p + (b + 0.5) * slot
-                col = mix(mix(C["accent"], "#b06dff", min(1.0, 2 * b / max(nb - 1, 1))), "#ff6db0",
-                          max(0.0, 2 * b / max(nb - 1, 1) - 1))
-                cv.create_line(bx, top + 22 + bw / 2, bx, bottom - bw / 2, width=bw, capstyle="round",
-                               fill=C["panel2"])
-                bar = cv.create_line(bx, bottom - bw / 2, bx, bottom - bw / 2, width=bw, capstyle="round",
-                                     fill=col, state="hidden")
-                cap = cv.create_line(bx - bw / 2, bottom, bx + bw / 2, bottom, width=2, fill=mix(col, "#ffffff", 0.4),
-                                     state="hidden")
-                self.band_items.append((bar, cap))
-            self.band_bw = bw
-        self.band_disp = [0.0] * len(self.band_items)
-        self.band_peak = [0.0] * len(self.band_items)
+        self._layout_spectrum(cv, p, w - p, max(y + 84, my + 92), h - p)
         self.drawn_frame = None
+
+    def _layout_spectrum(self, cv: tk.Canvas, x_left: float, x_right: float, top: float, bottom: float) -> None:
+        """Spectrum plot: log frequency axis, dBFS axis, optional filter-response axis (right)."""
+        self.spec_ok = bottom - top > 110
+        self.filt_items = []
+        self.tap_state = {}
+        if not self.spec_ok:
+            return
+        filt = self.cfg["filter_overlay"]
+        cv.create_text(x_left, top, text="SPECTRUM  ·  dBFS", fill=C["faint"], font=FONT_SM, anchor="w")
+        fs = self.info.sample_rate_hz if self.info else 16000
+        self.f_lo, self.f_hi = 30.0, fs / 2
+        l, r = x_left + 34, x_right - (40 if filt else 6)
+        t, b = top + 22, bottom - 20
+        self.plot = (l, r, t, b)
+        cv.create_rectangle(l, t, r, b, fill=C["bg"], width=0)
+        lo_db, hi_db = SPEC_DB_RANGE
+        for db in range(int(lo_db), int(hi_db) + 1, 20 if b - t > 160 else 40):
+            yy = self._y_db(db)
+            cv.create_line(l, yy, r, yy, fill=C["line"])
+            cv.create_text(l - 6, yy, text=str(db), fill=C["faint"], font=FONT_SM, anchor="e")
+        for fq in FREQ_TICKS:
+            if self.f_lo < fq < self.f_hi:
+                xx = self._x_f(fq)
+                cv.create_line(xx, t, xx, b, fill=C["line"])
+                cv.create_text(xx, b + 10, text=f"{fq // 1000}k" if fq >= 1000 else str(fq), fill=C["faint"],
+                               font=FONT_SM)
+        cv.create_text(r, b + 10, text="Hz", fill=C["faint"], font=FONT_SM, anchor="e")
+        if filt:
+            flo, fhi = FILTER_DB_RANGE
+            for db in range(int(flo), int(fhi) + 1, 12 if b - t > 160 else 24):
+                cv.create_text(r + 6, self._y_filt(db), text=f"{db:+d}" if db else "0", fill=C["muted"],
+                               font=FONT_SM, anchor="w")
+            cv.create_text(x_right, top, text="FILTER RESPONSE  ·  dB", fill=C["muted"], font=FONT_SM, anchor="e")
+
+        # query points: one every 3 px, interpolated in log frequency
+        npts = max(2, int((r - l) / 3))
+        self.q_x = [l + (r - l) * i / (npts - 1) for i in range(npts)]
+        self.q_f = [self.f_lo * (self.f_hi / self.f_lo) ** (i / (npts - 1)) for i in range(npts)]
+        self.q_logf = [math.log(f) for f in self.q_f]
+        flat = [v for x in self.q_x for v in (x, b)]
+        self.spec_fill = cv.create_polygon(*flat, r, b, l, b, fill=mix(C["accent"], C["bg"], 0.78), outline="",
+                                           state="hidden")
+        self.spec_peak = cv.create_line(*flat, fill=mix(C["accent"], C["bg"], 0.5), width=1, state="hidden")
+        self.spec_line = cv.create_line(*flat, fill=C["accent"], width=2, state="hidden")
+        self.proc_line = cv.create_line(*flat, fill=C["ok"], width=2, state="hidden")
+        self.spec_msg = cv.create_text((l + r) / 2, (t + b) / 2, text="", fill=C["faint"], font=FONT)
+        self._draw_filters()
+
+    def _x_f(self, f: float) -> float:
+        l, r, _, _ = self.plot
+        return l + (r - l) * math.log(f / self.f_lo) / math.log(self.f_hi / self.f_lo)
+
+    def _y_db(self, db: float) -> float:
+        _, _, t, b = self.plot
+        lo, hi = SPEC_DB_RANGE
+        return b - (b - t) * (min(max(db, lo), hi) - lo) / (hi - lo)
+
+    def _y_filt(self, db: float) -> float:
+        _, _, t, b = self.plot
+        lo, hi = FILTER_DB_RANGE
+        return b - (b - t) * (min(max(db, lo), hi) - lo) / (hi - lo)
+
+    @staticmethod
+    def _enabled_filters(algo: P.Algorithm | None, schemas: dict[int, P.StageSchema],
+                         values: dict[int, list[float]]) -> list[tuple[P.StageSchema, list[float]]]:
+        """Filter stages of @algo that are switched on (type != off), in pipeline order.
+
+        A filter stage is recognised by its parameters (type, frequency, q, gain), so a new
+        filter instance needs no host change.
+        """
+        out = []
+        for sid in (algo.stage_ids if algo else []):
+            st = schemas.get(sid)
+            vals = values.get(sid, [])
+            if st and [p.name for p in st.params[:4]] == ["type", "frequency", "q", "gain"] \
+                    and len(vals) >= 4 and int(round(vals[0])) > 0:
+                out.append((st, vals))
+        return out
+
+    def _active_algorithm(self) -> P.Algorithm | None:
+        if 0 <= self.active_algo < len(self.algorithms):
+            return self.algorithms[self.active_algo]
+        return None
+
+    def _wanted_taps(self, algo: P.Algorithm | None, schemas: dict[int, P.StageSchema],
+                     values: dict[int, list[float]]) -> int:
+        """Spectrum taps for the current view: input (after the first stage, the front-end),
+        the output of each enabled filter (filter overlay) and the end of the pipeline
+        (processed overlay). Unticked overlays are not requested, so the device skips them."""
+        if not algo or not algo.stage_ids:
+            return 0
+        mask = 1 << algo.stage_ids[0]
+        if self.cfg["filter_overlay"]:
+            for st, _ in self._enabled_filters(algo, schemas, values):
+                mask |= 1 << st.id
+        if self.cfg["processed_overlay"]:
+            mask |= 1 << P.TAP_END
+        return mask
+
+    def _subscribe(self) -> None:
+        """(Re)send LIVE_SUBSCRIBE with the live rate and the taps the view needs."""
+        if not self.connected:
+            return
+        taps = self._wanted_taps(self._active_algorithm(), self.schemas, self.values)
+        hz = self.worker.live_hz if self.live_on.get() else 0
+        self.worker.live_taps = taps
+        self.call(Cmd.LIVE_SUBSCRIBE, P.build_live_subscribe(self.live.port, hz, taps),
+                  lambda body: self._on_layout(P.SpectrumLayout.decode(body)))
+        self.live.reset()
+
+    def _on_layout(self, lay: P.SpectrumLayout) -> None:
+        fs = self.info.sample_rate_hz if self.info else 16000
+        self.spec_layout = lay
+        self.spec_logf = [math.log(f) for f in lay.freqs(fs)] if len(lay.edges) > 1 else []
+        self.tap_state = {}
+        if getattr(self, "spec_ok", False) and self.spec_logf:
+            # the curve starts at the first point instead of extrapolating below it
+            self.q0 = next((i for i, lf in enumerate(self.q_logf) if lf >= self.spec_logf[0]), 0)
+
+    def _filters_changed(self) -> None:
+        """Filter parameters changed: redraw responses; a filter switched on/off changes the taps."""
+        self._draw_filters()
+        if self._wanted_taps(self._active_algorithm(), self.schemas, self.values) != self.worker.live_taps:
+            self._subscribe()
+
+    def _overlays_changed(self) -> None:
+        self.cfg["filter_overlay"] = self.filt_on.get()
+        self.cfg["processed_overlay"] = self.proc_on.get()
+        self._subscribe()
+        self._layout_live()             # the filter-response axis appears / disappears
+
+    def _draw_filters(self) -> None:
+        """Filter overlay: per enabled filter its response (dashed, right axis), a marker with
+        type and frequency, and a curve item for its measured output spectrum. Rebuilt only
+        when filters, algorithm or layout change."""
+        cv = self.cv
+        for it in self.filt_items:
+            cv.delete(it)
+        self.filt_items = []
+        self.filt_curves: dict[int, int] = {}
+        if not getattr(self, "spec_ok", False) or not self.info:
+            return
+        l, r, t, b = self.plot
+        roomy = b - t >= 150                # legend and filter labels only where they fit
+        legend = [("Input", C["accent"])]
+        if self.cfg["processed_overlay"]:
+            legend.append(("After processing", C["ok"]))
+        if self.cfg["filter_overlay"]:
+            fs = float(self.info.sample_rate_hz)
+            filters = self._enabled_filters(self._active_algorithm(), self.schemas, self.values)
+            if not filters:
+                self.filt_items.append(cv.create_text(r - 8, t + 12, text="no filter enabled", fill=C["muted"],
+                                                      font=FONT_SM, anchor="e"))
+            y0 = self._y_filt(0)
+            if filters:
+                self.filt_items.append(cv.create_line(l, y0, r, y0, fill=C["line"], dash=(2, 4)))
+            for n, (st, vals) in enumerate(filters):
+                col = FILTER_COLORS[n % len(FILTER_COLORS)]
+                ftype, f0, q, gain = int(round(vals[0])), vals[1], vals[2], vals[3]
+                resp = biquad_db(ftype, f0, q, gain, fs, self.q_f)
+                pts = [v for x, d in zip(self.q_x, resp) for v in (x, self._y_filt(d))]
+                self.filt_items.append(cv.create_line(*pts, fill=mix(col, C["bg"], 0.25), width=1, dash=(6, 4)))
+                self.filt_curves[st.id] = cv.create_line(l, b, r, b, fill=col, width=2, state="hidden")
+                self.filt_items.append(self.filt_curves[st.id])
+                if self.f_lo < f0 < self.f_hi:
+                    xx, yy = self._x_f(f0), self._y_filt(biquad_db(ftype, f0, q, gain, fs, [f0])[0])
+                    opts = st.params[0].options
+                    kind = opts[ftype] if ftype < len(opts) else ""
+                    self.filt_items.append(cv.create_oval(xx - 4, yy - 4, xx + 4, yy + 4, fill=col, width=0))
+                    if roomy:
+                        self.filt_items.append(cv.create_text(xx + 8, yy - 10, fill=col, font=FONT_SM, anchor="w",
+                                                              text=f"{st.name} · {kind} {f0:.0f} Hz"))
+                legend.append((f"{st.name} output", col))
+        cv.tag_raise(self.proc_line)        # the processed overlay stays visible over filter outputs
+        x = l + 10
+        for text, col in (legend if roomy else []):
+            self.filt_items.append(cv.create_rectangle(x, t + 8, x + 10, t + 12, fill=col, width=0))
+            it = cv.create_text(x + 14, t + 10, text=text, fill=C["muted"], font=FONT_SM, anchor="w")
+            self.filt_items.append(it)
+            x = cv.bbox(it)[2] + 16
+
+    def _curve(self, tap: int, db: list[float], hold: bool = False) -> tuple[list[float], list[float]]:
+        """Smoothed (fast attack, soft release) and interpolated points of one tap."""
+        st = self.tap_state.get(tap)
+        if st is None or len(st[0]) != len(db):
+            st = self.tap_state[tap] = (list(db), list(db))
+        disp, pk = st
+        for i, v in enumerate(db):
+            d = v if v > disp[i] else disp[i] * 0.7 + v * 0.3
+            disp[i] = d
+            pk[i] = d if d > pk[i] else pk[i] - 0.35          # peak hold falls ~20 dB/s
+        qf = self.q_logf[self.q0:]
+        ys = pchip(self.spec_logf, disp, qf)
+        pts = [v for x, y in zip(self.q_x[self.q0:], ys) for v in (x, self._y_db(y))]
+        if not hold:
+            return pts, []
+        return pts, [v for x, y in zip(self.q_x[self.q0:], pchip(self.spec_logf, pk, qf)) for v in (x, self._y_db(y))]
+
+    def _genre_name(self, g: int) -> str:
+        """Name from the music stage's "genre" enum (device schema), so new genres need no host change."""
+        if g <= 0:
+            return "--"
+        for st in self.schemas.values():
+            for prm in st.params:
+                if prm.name == "genre" and prm.type == ParamType.ENUM and g < len(prm.options):
+                    name = prm.options[g]
+                    return name.upper() if len(name) <= 3 else name.capitalize()
+        return f"#{g}"
 
     def _draw(self, f: P.LiveData) -> None:
         cv = self.cv
@@ -1084,15 +1332,8 @@ class App:
             if key == self.led_colors[i]:
                 continue
             self.led_colors[i] = key
-            glow_item, core_item = self.led_items[i]
-            if r | g | b:
-                # sqrt lift: dim LED values stay visible on screen (the strip's own output is unchanged)
-                c = "#%02x%02x%02x" % tuple(int(255 * (v / 255) ** 0.5) for v in (r, g, b))
-                cv.itemconfigure(core_item, fill=c)
-                cv.itemconfigure(glow_item, fill=mix(c, C["panel"], 0.62))
-            else:
-                cv.itemconfigure(core_item, fill=C["socket"])
-                cv.itemconfigure(glow_item, fill=C["bg"])
+            # colours as sent to the strip (brightness and power limit applied), drawn linearly
+            cv.itemconfigure(self.led_items[i], fill="#" + key if r | g | b else C["socket"])
 
         (mx0, mx1), (ly, ty) = self.meter_x, self.meter_y
         lv = f.level / 32767
@@ -1111,30 +1352,46 @@ class App:
             self.last_beat = f.beat_count
         k = max(0.0, 1.0 - (now - self.beat_until) / 0.3)
         cv.itemconfigure(self.beat_item, fill=mix(C["socket"], C["bad"], k))
+        if f.genre != self.shown_genre:
+            self.shown_genre = f.genre
+            cv.itemconfigure(self.genre_item, text=self._genre_name(f.genre),
+                             fill=C["text"] if f.genre else C["muted"])
         cv.itemconfigure(self.mode_item, text={1: "CALIBRATION", 2: "FIRMWARE UPDATE"}.get(f.device_mode, ""))
-
-        if len(f.bands) != len(self.band_items) and self.band_items:
-            self.drawn_frame = f
-            self._layout_live()
-            return
-        top, bottom = self.band_geom
-        span = bottom - top - self.band_bw
-        for i, ((bar, cap), v) in enumerate(zip(self.band_items, f.bands)):
-            v /= 32767
-            d = v if v > self.band_disp[i] else self.band_disp[i] * 0.82 + v * 0.18   # fast attack, soft release
-            self.band_disp[i] = d
-            pk = max(d, self.band_peak[i] - 0.006)
-            self.band_peak[i] = pk
-            x = cv.coords(bar)[0]
-            yb = bottom - self.band_bw / 2
-            cv.coords(bar, x, yb, x, yb - span * d)
-            cv.itemconfigure(bar, state="normal" if d > 0.01 else "hidden")
-            yp = yb - span * pk - self.band_bw / 2 - 4
-            cv.coords(cap, x - self.band_bw / 2, yp, x + self.band_bw / 2, yp)
-            cv.itemconfigure(cap, state="normal" if pk > 0.02 else "hidden")
+        self._draw_spectrum(f)
         if f.device_mode != self.device_mode and f.device_mode in (0, 1, 2):
             self.device_mode = DeviceMode(f.device_mode)
             self._update_mode_ui()
+
+    def _draw_spectrum(self, f: P.LiveData) -> None:
+        if not self.spec_ok:
+            return
+        cv = self.cv
+        algo = self._active_algorithm()
+        in_tap = algo.stage_ids[0] if algo and algo.stage_ids else None
+        base_items = (self.spec_fill, self.spec_peak, self.spec_line, self.proc_line)
+        if not self.spec_logf or in_tap is None or in_tap not in f.spectra:
+            for it in base_items + tuple(self.filt_curves.values()):
+                cv.itemconfigure(it, state="hidden")
+            cv.itemconfigure(self.spec_msg, text="Waiting for spectrum data" if self.live_on.get() else "")
+            return
+        cv.itemconfigure(self.spec_msg, text="")
+        pts, pk = self._curve(in_tap, f.spectrum_db(in_tap), hold=True)
+        xs, b = self.q_x[self.q0:], self.plot[3]
+        cv.coords(self.spec_line, *pts)
+        cv.coords(self.spec_fill, *pts, xs[-1], b, xs[0], b)
+        cv.coords(self.spec_peak, *pk)
+        for it in base_items[:3]:
+            cv.itemconfigure(it, state="normal")
+        overlays = [(P.TAP_END, self.proc_line)] if self.cfg["processed_overlay"] else []
+        overlays += list(self.filt_curves.items())
+        for tap, item in overlays:
+            if tap in f.spectra:
+                cv.coords(item, *self._curve(tap, f.spectrum_db(tap))[0])
+                cv.itemconfigure(item, state="normal")
+            else:
+                cv.itemconfigure(item, state="hidden")
+        if not (self.cfg["processed_overlay"] and P.TAP_END in f.spectra):
+            cv.itemconfigure(self.proc_line, state="hidden")
 
     def _tick(self) -> None:
         """UI loop: worker results, then the newest live frame (if any). Always re-armed."""
@@ -1290,6 +1547,7 @@ class App:
                 var.set(v)              # clamped / quantised by the device
         self.calib_dirty = True
         self._update_mode_ui()
+        self._filters_changed()
 
     def _reload_values(self) -> None:
         def fn(link: Link) -> dict[int, list[float]]:
@@ -1298,6 +1556,7 @@ class App:
         def done(values: dict[int, list[float]]) -> None:
             self.values = values
             self._build_param_editors()
+            self._filters_changed()
         self.worker.submit(fn, done, lambda e: self._error("read parameters", e))
 
     def _calib_save(self) -> None:

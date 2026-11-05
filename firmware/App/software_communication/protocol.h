@@ -19,6 +19,9 @@
 /* Command id of the UDP live stream datagrams (same payload as the GET_LIVE response) */
 #define CMD_LIVE_FRAME          (CMD_GET_LIVE | 0x80)
 
+/* GET_LIVE spectrum points: u8 value v -> LIVE_SPEC_FLOOR_DB + v / 2 dBFS */
+#define LIVE_SPEC_FLOOR_DB      (-120)
+
 #define CMD_GET_ALGORITHMS      0x10
 #define CMD_GET_STAGE_LIST      0x11
 #define CMD_GET_STAGE_SCHEMA    0x12

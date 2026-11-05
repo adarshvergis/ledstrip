@@ -24,8 +24,8 @@
 
 static const char *TAG = "net";
 
-/* live stream datagram: header + payload (fixed fields, bands, LED colours) */
-#define NET_STREAM_MAX_PAYLOAD  (64u + 2u * 32u + 3u * LED_MAX_COUNT)
+/* live stream datagram: header + payload (fixed fields, bands, LED colours, genre, spectrum) */
+#define NET_STREAM_MAX_PAYLOAD  (64u + 2u * 32u + 3u * LED_MAX_COUNT + 2u + 4u * (2u + 72u))   /* 4 taps x 72 points */
 
 static net_config_t     s_cfg;
 static net_handler_t    s_handler;
@@ -451,6 +451,11 @@ int net_start(const net_config_t *cfg, net_handler_t handler, net_post_send_t po
         return HW_ERR_NO_MEM;
     }
     return HW_OK;
+}
+
+bool net_stream_active(void)
+{
+    return s_stream.active;
 }
 
 net_state_t net_state(void)
